@@ -10,6 +10,9 @@
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Statut du projet (source unique : ce fichier).
+pub const STATUT: &str = "Beta-Release";
+
 pub mod bootstrap;
 pub mod cli;
 pub mod config;

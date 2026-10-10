@@ -908,7 +908,11 @@ impl App
     fn aide_bashop(&mut self)
       {
         let lignes = vec![
-          "Bashop — cadre terminal permanent (3 lignes)".to_string(),
+          format!(
+            "Bashop {} ({}) — cadre terminal permanent (3 lignes)",
+            crate::VERSION,
+            crate::STATUT
+          ),
           String::new(),
           "F1        aide de la commande en cours (--help)".to_string(),
           "Ctrl+F1   suggestion issue de l'historique".to_string(),
