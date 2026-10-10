@@ -12,7 +12,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
-BASE_URL="${BASHOP_BASE_URL:-https://github.com/opa/bashop/releases/download}"
+BASE_URL="${BASHOP_BASE_URL:-https://github.com/OPA-Technologies/bashop/releases/download}"
 VERSION="$(awk -F' +' '/^version *=/{print $3; exit}' "$ROOT/Cargo.toml" | tr -d '"')"
 
 shopt -s nullglob

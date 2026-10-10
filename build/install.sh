@@ -21,7 +21,7 @@ set -eu
 PREFIX="${PREFIX:-$HOME/.local}"
 VERSION="${VERSION:-}"
 BASHOP_BIN="${BASHOP_BIN:-}"
-BASHOP_INDEX="${BASHOP_INDEX:-https://github.com/opa/bashop/releases/latest/download/index.json}"
+BASHOP_INDEX="${BASHOP_INDEX:-https://github.com/OPA-Technologies/bashop/releases/latest/download/index.json}"
 
 erreur()
   {

@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 
 $Prefix = if ($env:PREFIX) { $env:PREFIX } else { Join-Path $env:LOCALAPPDATA 'Bashop' }
 $Version = if ($env:BASHOP_VERSION) { $env:BASHOP_VERSION } else { 'latest' }
-$IndexUrl = if ($env:BASHOP_INDEX) { $env:BASHOP_INDEX } else { 'https://github.com/opa/bashop/releases/latest/download/index.json' }
+$IndexUrl = if ($env:BASHOP_INDEX) { $env:BASHOP_INDEX } else { 'https://github.com/OPA-Technologies/bashop/releases/latest/download/index.json' }
 
 function Write-Info([string]$Message)
   {
