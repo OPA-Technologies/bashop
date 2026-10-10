@@ -7,7 +7,7 @@
 use vte::{Params, Perform};
 
 use super::grid::Couleur;
-use super::{EtatShell, Terminal};
+use super::{EtatShell, SourisMode, Terminal};
 
 /// Lit le n-ième paramètre, en repliant sur `defaut` s'il est absent ou nul.
 fn parametre(params: &Params, n: usize, defaut: u16, zero_autorise: bool) -> u16
@@ -85,12 +85,16 @@ impl Terminal
             match valeur
               {
                 25 => self.curseur_visible = actif,
-                1049 => {
-                  let modele = self.cellule_effacement();
-                  self.grid.effacer_ecran(modele);
-                  self.grid.curseur_lig = 0;
-                  self.grid.curseur_col = 0;
+                9 => self.souris = if actif { SourisMode::X10 } else { SourisMode::Aucune },
+                1000 => self.souris = if actif { SourisMode::Bouton } else { SourisMode::Aucune },
+                1002 => {
+                  self.souris = if actif { SourisMode::BoutonMouvement } else { SourisMode::Aucune };
                 }
+                1003 => self.souris = if actif { SourisMode::Mouvement } else { SourisMode::Aucune },
+                1006 => self.souris_sgr = actif,
+                1015 => self.souris_utf8 = actif,
+                2004 => self.paste_bracketed = actif,
+                1049 => self.ecran_alterne(actif),
                 _ => {}
               }
           }
@@ -115,6 +119,39 @@ impl Terminal
                 .and_then(|s| s.trim().parse::<i32>().ok());
             }
             _ => {}
+          }
+      }
+
+    /// Traite l'OSC privé `1337;Bashop;user=…;priv=…` (reprise sous `sudo -i`).
+    fn osc_prive(&mut self, params: &[&[u8]])
+      {
+        if params.get(1).and_then(|p| std::str::from_utf8(p).ok()) != Some("Bashop")
+          {
+            return;
+          }
+        for champ in params.iter().skip(2)
+          {
+            let Ok(texte) = std::str::from_utf8(champ)
+              else
+                {
+                  continue;
+                };
+            if let Some(nom) = texte.strip_prefix("user=")
+              {
+                if !nom.is_empty()
+                  {
+                    self.utilisateur = Some(nom.to_string());
+                  }
+              }
+            else if let Some(niveau) = texte.strip_prefix("priv=")
+              {
+                self.privilege = Some(match niveau
+                  {
+                    "root" => crate::detect::Privilege::Root,
+                    "wheel" => crate::detect::Privilege::Wheel,
+                    _ => crate::detect::Privilege::Classique,
+                  });
+              }
           }
       }
   }
@@ -209,7 +246,70 @@ impl Perform for Terminal
                 }
             }
             Some("133") => self.osc_133(params),
+            Some("1337") => self.osc_prive(params),
             _ => {}
           }
+      }
+  }
+
+#[cfg(test)]
+mod tests
+  {
+    use super::*;
+
+    fn alimenter(term: &mut Terminal, octets: &[u8])
+      {
+        let mut parser = vte::Parser::new();
+        term.alimenter(&mut parser, octets);
+      }
+
+    #[test]
+    fn l_osc_prive_fixe_l_identite_et_le_privilege()
+      {
+        let mut term = Terminal::nouveau(20, 4);
+        alimenter(&mut term, b"\x1b]1337;Bashop;user=root;priv=root\x07");
+        assert_eq!(term.utilisateur.as_deref(), Some("root"));
+        assert_eq!(term.privilege, Some(crate::detect::Privilege::Root));
+      }
+
+    #[test]
+    fn un_osc_prive_etranger_est_ignore()
+      {
+        let mut term = Terminal::nouveau(20, 4);
+        alimenter(&mut term, b"\x1b]1337;Autre;user=x;priv=root\x07");
+        assert_eq!(term.utilisateur, None);
+      }
+
+    #[test]
+    fn lecran_alterne_restaure_le_contenu()
+      {
+        let mut term = Terminal::nouveau(10, 3);
+        alimenter(&mut term, b"bonjour");
+        alimenter(&mut term, b"\x1b[?1049h");
+        assert!(!term.grid.texte_ligne(0).contains("bonjour"));
+        alimenter(&mut term, b"\x1b[?1049l");
+        assert!(term.grid.texte_ligne(0).contains("bonjour"));
+      }
+
+    #[test]
+    fn le_suivi_souris_suit_les_decset()
+      {
+        let mut term = Terminal::nouveau(10, 3);
+        assert!(!term.suivi_souris());
+        alimenter(&mut term, b"\x1b[?1002h\x1b[?1006h");
+        assert!(term.suivi_souris());
+        assert_eq!(term.souris, SourisMode::BoutonMouvement);
+        assert!(term.souris_sgr);
+        alimenter(&mut term, b"\x1b[?1002l");
+        assert!(!term.suivi_souris());
+      }
+
+    #[test]
+    fn le_collage_encadre_suit_le_decset()
+      {
+        let mut term = Terminal::nouveau(10, 3);
+        assert!(!term.paste_bracketed);
+        alimenter(&mut term, b"\x1b[?2004h");
+        assert!(term.paste_bracketed);
       }
   }

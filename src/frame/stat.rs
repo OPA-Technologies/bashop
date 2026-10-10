@@ -58,9 +58,12 @@ pub fn repartir(gauche: &str, centre: &str, droite: &str, largeur: usize) -> Str
   }
 
 /// Compose la ligne d'état complète.
-pub fn contenu(largeur: u16) -> String
+///
+/// `identite` et `charge` sont fournies par l'appelant (identité dynamique sous
+/// reprise root, charge rafraîchie au tick) pour éviter des résolutions
+/// coûteuses à chaque rendu.
+pub fn contenu(largeur: u16, identite: &str, charge: &str) -> String
   {
-    let identite = providers::identite();
     let fqdn = providers::fqdn();
     let gauche = match providers::adresse_ip()
       {
@@ -83,7 +86,6 @@ pub fn contenu(largeur: u16) -> String
       {
         droite.push_str(&format!(" · UTC {}", utc));
       }
-    let charge = providers::charge();
     if !charge.is_empty()
       {
         droite.push_str(&format!(" · {}", charge));

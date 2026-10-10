@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use crossterm::event::{
-  self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-  MouseEventKind,
+  self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+  KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
@@ -27,12 +27,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::config::Config;
+use crate::detect::Privilege;
 use crate::frame::{context, stat};
 use crate::observe::EtatShell;
 use crate::providers::{self, MesureSysteme};
+use crate::restauration;
 use crate::safety;
 use crate::shells::Shell;
-use crate::term::Terminal;
+use crate::term::{SourisMode, Terminal};
 use crate::term::grid::{Cellule, Couleur};
 use crate::term::overlay::{Nature, Overlay};
 use crate::theme::{self, Theme};
@@ -49,6 +51,10 @@ enum RcPrepare
 /// Lance un shell à l'intérieur du cadre permanent.
 pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
   {
+    if crate::detect::deja_actif() || crate::detect::ancetre_bashop()
+      {
+        bail!("Bashop est déjà actif : cadre imbriqué refusé (utilisez BASHOP_DISABLE=1).");
+      }
     let shell = shell_demande
       .as_deref()
       .and_then(Shell::par_nom)
@@ -70,6 +76,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     let rc = preparer_rc(shell, &theme, config.suffix_width);
     let mut commande = CommandBuilder::new(shell.programme());
     commande.env("TERM", "xterm-256color");
+    commande.env("BASHOP_ACTIVE", "1");
     match &rc
       {
         Some(RcPrepare::Rcfile(chemin)) => {
@@ -84,6 +91,10 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       }
 
     let enfant = paire.slave.spawn_command(commande)?;
+    if let Some(pid) = enfant.process_id()
+      {
+        restauration::surveiller_enfant(pid);
+      }
     drop(paire.slave);
     let mut lecteur = paire.master.try_clone_reader()?;
     let ecrivain = paire.master.take_writer()?;
@@ -110,13 +121,19 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     std::panic::set_hook(Box::new(move |info| {
       let _ = disable_raw_mode();
       let _ = write!(io::stdout(), "{}", reinitialiser_fond());
-      let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+      let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+      );
       hook(info);
     }));
 
+    restauration::installer();
     enable_raw_mode()?;
     let mut sortie = io::stdout();
-    execute!(sortie, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(sortie, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     write!(sortie, "{}", definir_fond())?;
     sortie.flush()?;
     let backend = CrosstermBackend::new(sortie);
@@ -143,16 +160,19 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       a_executer: None,
       historique: charger_historique(),
       systeme: MesureSysteme::nouveau(),
+      charge: providers::charge(),
       derniere_maj: Instant::now(),
+      dernier_flux: Instant::now(),
       quitter: false,
     };
 
     let resultat = app.boucle(&mut terminal);
 
+    restauration::desactiver();
     disable_raw_mode()?;
     let arriere = terminal.backend_mut();
     let _ = write!(arriere, "{}", reinitialiser_fond());
-    execute!(arriere, LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(arriere, LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
     arriere.flush()?;
     terminal.show_cursor()?;
     nettoyer_rc(rc);
@@ -195,7 +215,9 @@ struct App
     a_executer: Option<Vec<u8>>,
     historique: Vec<String>,
     systeme: MesureSysteme,
+    charge: String,
     derniere_maj: Instant,
+    dernier_flux: Instant,
     quitter: bool,
   }
 
@@ -209,6 +231,7 @@ impl App
             if self.derniere_maj.elapsed() >= Duration::from_millis(500)
               {
                 self.systeme.maj();
+                self.charge = providers::charge();
                 self.derniere_maj = Instant::now();
                 sale = true;
               }
@@ -218,6 +241,8 @@ impl App
                   {
                     Ok(octets) => {
                       self.term.alimenter(&mut self.parser, &octets);
+                      self.dernier_flux = Instant::now();
+                      self.rafraichir_privilege();
                       sale = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -244,17 +269,11 @@ impl App
                       sale = true;
                     }
                     Event::Paste(texte) => {
-                      self.ecrivain.write_all(texte.as_bytes())?;
-                      self.ecrivain.flush()?;
+                      self.coller(&texte)?;
                       sale = true;
                     }
                     Event::Mouse(souris) => {
-                      match souris.kind
-                        {
-                          MouseEventKind::ScrollUp => self.defiler(3),
-                          MouseEventKind::ScrollDown => self.defiler(-3),
-                          _ => {}
-                        }
+                      self.souris(&souris)?;
                       sale = true;
                     }
                     _ => {}
@@ -303,7 +322,7 @@ impl App
             }
             _ => {}
           }
-        let au_prompt = matches!(self.term.etat, EtatShell::Prompt | EtatShell::Inconnu);
+        let au_prompt = self.etat_effectif();
         if au_prompt
           {
             match touche.code
@@ -480,6 +499,121 @@ impl App
         self.decalage = (self.decalage as i32 + delta).clamp(0, max) as usize;
       }
 
+    /// État effectif du shell, avec repli « idle » pour les shells sans OSC 133.
+    ///
+    /// Si aucun octet n'est arrivé depuis un court délai, on considère que le
+    /// shell attend une saisie (repli documenté SPEC §2).
+    fn etat_effectif(&self) -> bool
+      {
+        match self.term.etat
+          {
+            EtatShell::Prompt => true,
+            EtatShell::Inconnu | EtatShell::Commande => {
+              self.dernier_flux.elapsed() >= Duration::from_millis(250)
+            }
+          }
+      }
+
+    /// Recalcule le thème si le privilège publié par le shell a changé.
+    fn rafraichir_privilege(&mut self)
+      {
+        if let Some(privilege) = self.term.privilege
+          {
+            let theme = theme::resoudre(&self.config.theme, privilege);
+            if theme != self.theme
+              {
+                self.theme = theme;
+              }
+          }
+      }
+
+    /// Identité affichée : celle publiée par le shell (reprise root), sinon la
+    /// détection locale.
+    fn identite_courante(&self) -> String
+      {
+        match &self.term.utilisateur
+          {
+            Some(utilisateur) if !utilisateur.is_empty() => {
+              format!("{utilisateur}@{}", providers::hote())
+            }
+            _ => providers::identite(),
+          }
+      }
+
+    /// Traite un collage : confirmation si multi-lignes, sinon transmission.
+    fn coller(&mut self, texte: &str) -> Result<()>
+      {
+        if texte.lines().count() > 1
+          {
+            let mut lignes = vec![
+              format!("Collage de {} lignes :", texte.lines().count()),
+              String::new(),
+            ];
+            for ligne in texte.lines().take(6)
+              {
+                lignes.push(format!("  {ligne}"));
+              }
+            lignes.push(String::new());
+            lignes.push("Transmettre le collage tel quel ?".to_string());
+            self.a_executer = Some(self.encoder_collage(texte));
+            self.overlay_decalage = 0;
+            self.overlay = Some(Overlay::confirmation("Confirmation de collage", lignes));
+            return Ok(());
+          }
+        let octets = self.encoder_collage(texte);
+        self.ecrivain.write_all(&octets)?;
+        self.ecrivain.flush()?;
+        Ok(())
+      }
+
+    /// Encadre un collage si le programme enfant a activé le bracketed paste.
+    fn encoder_collage(&self, texte: &str) -> Vec<u8>
+      {
+        if self.term.paste_bracketed
+          {
+            let mut octets = Vec::with_capacity(texte.len() + 12);
+            octets.extend_from_slice(b"\x1b[200~");
+            octets.extend_from_slice(texte.as_bytes());
+            octets.extend_from_slice(b"\x1b[201~");
+            octets
+          }
+        else
+          {
+            texte.as_bytes().to_vec()
+          }
+      }
+
+    /// Traite un évènement souris : transmis si l'enfant l'a demandé, sinon
+    /// utilisé pour défiler l'historique.
+    fn souris(&mut self, ev: &MouseEvent) -> Result<()>
+      {
+        if self.term.suivi_souris()
+          && let Some(octets) = encoder_souris(&self.term, ev)
+          {
+            self.ecrivain.write_all(&octets)?;
+            self.ecrivain.flush()?;
+            return Ok(());
+          }
+        match ev.kind
+          {
+            MouseEventKind::ScrollUp => self.defiler(3),
+            MouseEventKind::ScrollDown => self.defiler(-3),
+            _ => {}
+          }
+        Ok(())
+      }
+
+    /// Indique si le cadre doit signaler un état root (thème ou déclencheur).
+    fn root_actif(&self) -> bool
+      {
+        if matches!(self.term.privilege, Some(Privilege::Root)) || crate::detect::est_root()
+          {
+            return true;
+          }
+        let commande = self.term.commande_courante();
+        crate::lexer::contient_declencheur(&commande, &self.config.triggers)
+      }
+
     fn completer(&mut self)
       {
         let commande = self.term.commande_courante();
@@ -597,7 +731,7 @@ impl App
     /// historique. Renvoie `(reste à afficher, suggestion complète)`.
     fn fantome_live(&self) -> Option<(String, String)>
       {
-        if !matches!(self.term.etat, EtatShell::Prompt | EtatShell::Inconnu)
+        if !self.etat_effectif()
           {
             return None;
           }
@@ -729,16 +863,6 @@ impl App
         self.overlay = Some(Overlay::information("Aide de Bashop", lignes));
       }
 
-    fn root_actif(&self) -> bool
-      {
-        if crate::detect::est_root()
-          {
-            return true;
-          }
-        let commande = self.term.commande_courante();
-        crate::lexer::contient_declencheur(&commande, &self.config.triggers)
-      }
-
     fn dessiner(&self, cadre: &mut ratatui::Frame)
       {
         let (ghost, suggestion) = match &self.ghost
@@ -754,6 +878,8 @@ impl App
           term: &self.term,
           config: &self.config,
           root: self.root_actif(),
+          identite: self.identite_courante(),
+          charge: self.charge.clone(),
           options: self.options_courantes(),
           suggestion,
           ghost: ghost.unwrap_or_default().chars().collect(),
@@ -772,6 +898,8 @@ struct Vue<'a>
     term: &'a Terminal,
     config: &'a Config,
     root: bool,
+    identite: String,
+    charge: String,
     options: Vec<String>,
     suggestion: Option<String>,
     ghost: Vec<char>,
@@ -793,7 +921,7 @@ impl Vue<'_>
             return;
           }
 
-        let stat_texte = stat::contenu(largeur);
+        let stat_texte = stat::contenu(largeur, &self.identite, &self.charge);
         let stat_style = Style::default()
           .fg(couleur_tuple(stat::TEXTE))
           .bg(couleur_tuple(stat::FOND))
@@ -1063,10 +1191,49 @@ fn dessiner_overlay(cadre: &mut ratatui::Frame, overlay: &Overlay, zone: Rect, d
     cadre.render_widget(Paragraph::new(lignes), interieur);
   }
 
-/// Encode une touche en octets à transmettre au shell.
+/// Valeur de modificateur xterm (`1` = aucun).
+fn valeur_modificateur(ctrl: bool, alt: bool, shift: bool) -> u8
+  {
+    1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl)
+  }
+
+/// Séquence CSI d'une touche de curseur, modificateurs inclus.
+fn sequence_curseur(finale: u8, ctrl: bool, alt: bool, shift: bool) -> Vec<u8>
+  {
+    let modificateur = valeur_modificateur(ctrl, alt, shift);
+    if modificateur == 1
+      {
+        vec![0x1b, b'[', finale]
+      }
+    else
+      {
+        format!("\x1b[1;{modificateur}{}", finale as char).into_bytes()
+      }
+  }
+
+/// Séquence CSI `n~` (Insert, Delete, PageUp, PageDown…), modificateurs inclus.
+fn sequence_csi_tilde(code: u8, ctrl: bool, alt: bool, shift: bool) -> Vec<u8>
+  {
+    let modificateur = valeur_modificateur(ctrl, alt, shift);
+    if modificateur == 1
+      {
+        format!("\x1b[{code}~").into_bytes()
+      }
+    else
+      {
+        format!("\x1b[{code};{modificateur}~").into_bytes()
+      }
+  }
+
+/// Encode une touche en octets à transmettre au shell (Alt/Meta, Ctrl, Shift).
 fn encoder_touche(touche: &KeyEvent) -> Vec<u8>
   {
-    if touche.modifiers.contains(KeyModifiers::CONTROL)
+    let ctrl = touche.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = touche.modifiers.contains(KeyModifiers::ALT);
+    let shift = touche.modifiers.contains(KeyModifiers::SHIFT);
+
+    if ctrl
+      && !alt
       && let KeyCode::Char(caractere) = touche.code
       {
         let majuscule = caractere.to_ascii_uppercase();
@@ -1075,7 +1242,8 @@ fn encoder_touche(touche: &KeyEvent) -> Vec<u8>
             return vec![(majuscule as u8) & 0x1f];
           }
       }
-    match touche.code
+
+    let octets = match touche.code
       {
         KeyCode::Char(caractere) => {
           let mut tampon = [0u8; 4];
@@ -1086,18 +1254,80 @@ fn encoder_touche(touche: &KeyEvent) -> Vec<u8>
         KeyCode::BackTab => b"\x1b[Z".to_vec(),
         KeyCode::Backspace => vec![0x7f],
         KeyCode::Esc => vec![0x1b],
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Left => sequence_curseur(b'D', ctrl, alt, shift),
+        KeyCode::Right => sequence_curseur(b'C', ctrl, alt, shift),
+        KeyCode::Up => sequence_curseur(b'A', ctrl, alt, shift),
+        KeyCode::Down => sequence_curseur(b'B', ctrl, alt, shift),
+        KeyCode::Home => sequence_curseur(b'H', ctrl, alt, shift),
+        KeyCode::End => sequence_curseur(b'F', ctrl, alt, shift),
+        KeyCode::Delete => sequence_csi_tilde(3, ctrl, alt, shift),
+        KeyCode::Insert => sequence_csi_tilde(2, ctrl, alt, shift),
+        KeyCode::PageUp => sequence_csi_tilde(5, ctrl, alt, shift),
+        KeyCode::PageDown => sequence_csi_tilde(6, ctrl, alt, shift),
         KeyCode::F(n) => sequence_fonction(n),
         _ => Vec::new(),
+      };
+    if alt && !octets.is_empty() && octets[0] != 0x1b
+      {
+        let mut precede = Vec::with_capacity(octets.len() + 1);
+        precede.push(0x1b);
+        precede.extend_from_slice(&octets);
+        return precede;
+      }
+    octets
+  }
+
+/// Code de base d'un bouton souris (SGR/legacy).
+fn bouton_base(bouton: MouseButton) -> u8
+  {
+    match bouton
+      {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+      }
+  }
+
+/// Encode un évènement souris selon le protocole demandé par le programme.
+fn encoder_souris(term: &Terminal, ev: &MouseEvent) -> Option<Vec<u8>>
+  {
+    match term.souris
+      {
+        SourisMode::Aucune => return None,
+        SourisMode::X10 if !matches!(ev.kind, MouseEventKind::Down(_)) => return None,
+        SourisMode::Bouton if matches!(ev.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved) => {
+          return None;
+        }
+        _ => {}
+      }
+    let (code, relache) = match ev.kind
+      {
+        MouseEventKind::Down(bouton) => (bouton_base(bouton), false),
+        MouseEventKind::Up(bouton) => (bouton_base(bouton), true),
+        MouseEventKind::Drag(bouton) => (bouton_base(bouton) + 32, false),
+        MouseEventKind::Moved => (3 + 32, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        MouseEventKind::ScrollLeft => (66, false),
+        MouseEventKind::ScrollRight => (67, false),
+      };
+    let x = ev.column + 1;
+    let y = ev.row + 1;
+    if term.souris_sgr
+      {
+        let finale = if relache { 'm' } else { 'M' };
+        Some(format!("\x1b[<{code};{x};{y}{finale}").into_bytes())
+      }
+    else if term.souris_utf8
+      {
+        Some(format!("\x1b[{code};{x};{y}M").into_bytes())
+      }
+    else
+      {
+        let code = if relache { 3 } else { code };
+        let cx = x.min(223) as u8 + 32;
+        let cy = y.min(223) as u8 + 32;
+        Some(vec![0x1b, b'[', b'M', 32 + code, cx, cy])
       }
   }
 
@@ -1121,7 +1351,10 @@ fn sequence_fonction(n: u8) -> Vec<u8>
       }
   }
 
-/// Charge l'historique (bash et zsh) pour les suggestions.
+/// Nombre maximal de lignes d'historique conservées en mémoire.
+const HISTORIQUE_MAX: usize = 20_000;
+
+/// Charge l'historique (bash et zsh) pour les suggestions, borné.
 fn charger_historique() -> Vec<String>
   {
     let mut lignes = Vec::new();
@@ -1145,7 +1378,40 @@ fn charger_historique() -> Vec<String>
               }
           }
       }
+    if lignes.len() > HISTORIQUE_MAX
+      {
+        lignes.drain(0..lignes.len() - HISTORIQUE_MAX);
+      }
     lignes
+  }
+
+/// Lance `programme argument` et renvoie sa sortie, en tuant le processus
+/// s'il dépasse `delai` (évite tout gel/blocage sur un `--help` capricieux).
+fn sortie_avec_delai(programme: &str, argument: &str, delai: Duration) -> Option<std::process::Output>
+  {
+    use std::process::{Command, Stdio};
+    let mut enfant = Command::new(programme)
+      .arg(argument)
+      .stdin(Stdio::null())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .spawn()
+      .ok()?;
+    let limite = Instant::now() + delai;
+    loop
+      {
+        match enfant.try_wait()
+          {
+            Ok(Some(_)) => return enfant.wait_with_output().ok(),
+            Ok(None) if Instant::now() >= limite => {
+              let _ = enfant.kill();
+              let _ = enfant.wait();
+              return None;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => return None,
+          }
+      }
   }
 
 /// Exécute `commande --help` et renvoie sa sortie (bornée), si disponible.
@@ -1155,7 +1421,7 @@ fn aide_commande(commande: &str) -> Option<Vec<String>>
       {
         return None;
       }
-    let sortie = std::process::Command::new(commande).arg("--help").output().ok()?;
+    let sortie = sortie_avec_delai(commande, "--help", Duration::from_secs(2))?;
     let texte = if sortie.stdout.is_empty()
       {
         String::from_utf8_lossy(&sortie.stderr).to_string()
@@ -1183,7 +1449,7 @@ fn options_du_help(commande: &str) -> Vec<String>
       {
         return Vec::new();
       }
-    let Ok(sortie) = std::process::Command::new(programme).arg("--help").output()
+    let Some(sortie) = sortie_avec_delai(programme, "--help", Duration::from_secs(3))
       else
         {
           return Vec::new();
@@ -1219,21 +1485,51 @@ fn options_du_help(commande: &str) -> Vec<String>
     options
   }
 
-/// Prépare le fichier de démarrage du shell (bash : `--rcfile`, zsh : `ZDOTDIR`).
+/// Répertoire de base pour les fichiers temporaires : `XDG_RUNTIME_DIR` si
+/// disponible (nettoyé par le système), sinon le répertoire temporaire.
+fn base_runtime() -> PathBuf
+  {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR")
+      {
+        let chemin = PathBuf::from(dir);
+        if chemin.is_dir()
+          {
+            return chemin;
+          }
+      }
+    std::env::temp_dir()
+  }
+
+/// Restreint un répertoire au propriétaire (0700) sous Unix.
+#[cfg(unix)]
+fn proteger(chemin: &std::path::Path)
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(chemin, std::fs::Permissions::from_mode(0o700));
+  }
+
+/// Sans objet hors Unix.
+#[cfg(not(unix))]
+fn proteger(_chemin: &std::path::Path) {}
+
+/// Prépare le fichier de démarrage du shell (bash : `--rcfile`, zsh : `ZDOTDIR`)
+/// dans un répertoire privé propre au pid.
 fn preparer_rc(shell: Shell, theme: &Theme, largeur_suffixe: u16) -> Option<RcPrepare>
   {
-    let racine = std::env::temp_dir();
-    let pid = std::process::id();
+    let dossier = base_runtime().join(format!("bashop-{}", std::process::id()));
+    std::fs::create_dir_all(&dossier).ok()?;
+    proteger(&dossier);
     match shell
       {
         Shell::Bash => {
-          let chemin = racine.join(format!("bashop-{pid}.bashrc"));
+          let chemin = dossier.join("bashrc");
           std::fs::write(&chemin, crate::bootstrap::rc_bash(theme, largeur_suffixe)).ok()?;
           Some(RcPrepare::Rcfile(chemin))
         }
         Shell::Zsh => {
-          let dossier = racine.join(format!("bashop-{pid}-zsh"));
-          std::fs::create_dir_all(&dossier).ok()?;
+          std::fs::write(dossier.join(".zshenv"), crate::bootstrap::zshenv_zsh()).ok()?;
+          std::fs::write(dossier.join(".zprofile"), crate::bootstrap::zprofile_zsh()).ok()?;
+          std::fs::write(dossier.join(".zlogin"), crate::bootstrap::zlogin_zsh()).ok()?;
           std::fs::write(dossier.join(".zshrc"), crate::bootstrap::zshrc_zsh(theme, largeur_suffixe)).ok()?;
           Some(RcPrepare::Zdotdir(dossier))
         }
@@ -1246,11 +1542,18 @@ fn nettoyer_rc(rc: Option<RcPrepare>)
     match rc
       {
         Some(RcPrepare::Rcfile(chemin)) => {
-          let _ = std::fs::remove_file(chemin);
+          let _ = std::fs::remove_file(&chemin);
+          if let Some(parent) = chemin.parent()
+            {
+              let _ = std::fs::remove_dir(parent);
+            }
         }
         Some(RcPrepare::Zdotdir(dossier)) => {
-          let _ = std::fs::remove_file(dossier.join(".zshrc"));
-          let _ = std::fs::remove_dir(dossier);
+          for nom in [".zshenv", ".zprofile", ".zshrc", ".zlogin"]
+            {
+              let _ = std::fs::remove_file(dossier.join(nom));
+            }
+          let _ = std::fs::remove_dir(&dossier);
         }
         None => {}
       }
@@ -1286,6 +1589,8 @@ mod tests
           term: &term,
           config: &config,
           root: false,
+          identite: "test@hote".to_string(),
+          charge: "0.42".to_string(),
           options: vec!["--all".to_string()],
           suggestion: None,
           ghost: Vec::new(),
@@ -1312,6 +1617,8 @@ mod tests
           term: &term,
           config: &config,
           root: false,
+          identite: "test@hote".to_string(),
+          charge: String::new(),
           options: Vec::new(),
           suggestion: None,
           ghost: Vec::new(),
@@ -1322,5 +1629,123 @@ mod tests
         };
         let mut terminal = RatTerminal::new(TestBackend::new(10, 2)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
+      }
+
+    #[test]
+    fn ctrl_c_donne_un_seul_octet()
+      {
+        let touche = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(encoder_touche(&touche), vec![0x03]);
+      }
+
+    #[test]
+    fn alt_sur_une_lettre_ajoute_le_prefixe_escape()
+      {
+        let touche = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT);
+        assert_eq!(encoder_touche(&touche), vec![0x1b, b'f']);
+      }
+
+    #[test]
+    fn ctrl_majuscule_et_ctrl_les_deux_gestes()
+      {
+        let controle = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(encoder_touche(&controle), vec![0x17]);
+        let controle_maj = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        assert_eq!(encoder_touche(&controle_maj), vec![0x17]);
+      }
+
+    #[test]
+    fn les_sequences_sur_les_fleches_portent_les_modificateurs()
+      {
+        let gauche = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+        assert_eq!(encoder_touche(&gauche), b"\x1b[1;5D".to_vec());
+        let haut = KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT);
+        assert_eq!(encoder_touche(&haut), b"\x1b[1;2A".to_vec());
+        let simple = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(encoder_touche(&simple), b"\x1b[C".to_vec());
+      }
+
+    #[test]
+    fn la_version_non_privee_des_touches_fonctionnaires_est_conservee()
+      {
+        let f1 = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(encoder_touche(&f1), b"\x1bOP".to_vec());
+        let delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT);
+        assert_eq!(encoder_touche(&delete), b"\x1b[3;2~".to_vec());
+      }
+
+    #[test]
+    fn la_souris_sgr_suit_le_mode_du_terminal()
+      {
+        let mut term = Terminal::nouveau(100, 30);
+        term.souris = SourisMode::Mouvement;
+        term.souris_sgr = true;
+        let ev = MouseEvent {
+          kind: MouseEventKind::Down(MouseButton::Left),
+          column: 4,
+          row: 2,
+          modifiers: KeyModifiers::NONE,
+        };
+        let enc = encoder_souris(&term, &ev).unwrap();
+        assert_eq!(enc, b"\x1b[<0;5;3M".to_vec());
+      }
+
+    #[test]
+    fn la_souris_relachee_se_termine_par_m()
+      {
+        let mut term = Terminal::nouveau(100, 30);
+        term.souris = SourisMode::Bouton;
+        term.souris_sgr = true;
+        let ev = MouseEvent {
+          kind: MouseEventKind::Up(MouseButton::Right),
+          column: 1,
+          row: 1,
+          modifiers: KeyModifiers::NONE,
+        };
+        let enc = encoder_souris(&term, &ev).unwrap();
+        assert_eq!(enc, b"\x1b[<2;2;2m".to_vec());
+      }
+
+    #[test]
+    fn la_souris_est_tuee_quand_personne_ne_l_a_demandee()
+      {
+        let term = Terminal::nouveau(100, 30);
+        let ev = MouseEvent {
+          kind: MouseEventKind::Down(MouseButton::Left),
+          column: 1,
+          row: 1,
+          modifiers: KeyModifiers::NONE,
+        };
+        assert!(encoder_souris(&term, &ev).is_none());
+      }
+
+    #[test]
+    fn sans_suivi_les_mouvements_ne_sont_pas_retransmis()
+      {
+        let mut term = Terminal::nouveau(100, 30);
+        term.souris = SourisMode::Bouton;
+        term.souris_sgr = true;
+        let ev = MouseEvent {
+          kind: MouseEventKind::Moved,
+          column: 1,
+          row: 1,
+          modifiers: KeyModifiers::NONE,
+        };
+        assert!(encoder_souris(&term, &ev).is_none());
+      }
+
+    #[test]
+    fn la_souris_legacy_encode_sur_trois_octets()
+      {
+        let mut term = Terminal::nouveau(100, 30);
+        term.souris = SourisMode::Bouton;
+        let ev = MouseEvent {
+          kind: MouseEventKind::Down(MouseButton::Middle),
+          column: 9,
+          row: 12,
+          modifiers: KeyModifiers::NONE,
+        };
+        let enc = encoder_souris(&term, &ev).unwrap();
+        assert_eq!(enc, vec![0x1b, b'[', b'M', 32 + 1, 32 + 10, 32 + 13]);
       }
   }

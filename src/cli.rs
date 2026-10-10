@@ -52,4 +52,7 @@ pub enum Command
         #[arg(default_value = "toggle")]
         state: String,
       },
+    /// (interne) Garde de nidification : sort 0 si le cadre peut être lancé.
+    #[command(name = "_guard", hide = true)]
+    Guard,
   }

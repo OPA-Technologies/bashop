@@ -9,44 +9,65 @@ use std::net::{IpAddr, UdpSocket};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-/// Nom d'utilisateur courant.
+/// Nom d'utilisateur courant, résolu une fois.
 pub fn utilisateur() -> String
   {
-    std::env::var("USER")
-      .or_else(|_| std::env::var("LOGNAME"))
-      .or_else(|_| std::env::var("USERNAME"))
-      .unwrap_or_else(|_| "?".to_string())
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE
+      .get_or_init(|| {
+        std::env::var("USER")
+          .or_else(|_| std::env::var("LOGNAME"))
+          .or_else(|_| std::env::var("USERNAME"))
+          .unwrap_or_else(|_| "?".to_string())
+      })
+      .clone()
   }
 
-/// Nom d'hôte court.
+/// Nom d'hôte court, résolu une fois.
 pub fn hote() -> String
   {
-    if let Ok(nom) = std::env::var("HOSTNAME")
-      && !nom.is_empty()
-      {
-        return nom;
-      }
-    if let Ok(contenu) = std::fs::read_to_string("/proc/sys/kernel/hostname")
-      {
-        let nom = contenu.trim();
-        if !nom.is_empty()
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE
+      .get_or_init(|| {
+        if let Ok(nom) = std::env::var("HOSTNAME")
+          && !nom.is_empty()
           {
-            return nom.to_string();
+            return nom;
           }
-      }
-    if let Ok(contenu) = std::fs::read_to_string("/etc/hostname")
-      {
-        let nom = contenu.trim();
-        if !nom.is_empty()
+        if let Ok(contenu) = std::fs::read_to_string("/proc/sys/kernel/hostname")
           {
-            return nom.to_string();
+            let nom = contenu.trim();
+            if !nom.is_empty()
+              {
+                return nom.to_string();
+              }
           }
-      }
-    "localhost".to_string()
+        if let Ok(contenu) = std::fs::read_to_string("/etc/hostname")
+          {
+            let nom = contenu.trim();
+            if !nom.is_empty()
+              {
+                return nom.to_string();
+              }
+          }
+        "localhost".to_string()
+      })
+      .clone()
   }
 
 /// Nom d'hôte pleinement qualifié (FQDN), repli sur le nom court.
+///
+/// Résolu une seule fois pour la session (`OnceLock`) : les commandes
+/// `hostname` et la résolution DNS inverse sont ainsi hors de la boucle de
+/// rendu.
 pub fn fqdn() -> String
+  {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(calculer_fqdn).clone()
+  }
+
+/// Calcul du FQDN (hors cache).
+fn calculer_fqdn() -> String
   {
     if let Ok(sortie) = std::process::Command::new("hostname").arg("-f").output()
       && sortie.status.success()
@@ -173,8 +194,15 @@ fn domaine_valide(domaine: &str) -> bool
     !domaine.is_empty() && !domaine.contains(' ') && domaine != "(none)" && domaine != "localdomain"
   }
 
-/// Domaine DNS local (`dnsdomainname`, puis `/etc/resolv.conf`).
+/// Domaine DNS local (`dnsdomainname`, puis `/etc/resolv.conf`), résolu une fois.
 fn domaine() -> Option<String>
+  {
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE.get_or_init(calculer_domaine).clone()
+  }
+
+/// Calcul du domaine (hors cache).
+fn calculer_domaine() -> Option<String>
   {
     if let Ok(sortie) = std::process::Command::new("dnsdomainname").output()
       && sortie.status.success()
@@ -202,11 +230,17 @@ fn domaine() -> Option<String>
   }
 
 /// Adresse IP locale (aucun paquet émis : on ne fait que lier puis connecter).
+///
+/// Résolue une seule fois pour la session.
 pub fn adresse_ip() -> Option<String>
   {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    socket.local_addr().ok().map(|adresse| adresse.ip().to_string())
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+      let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+      socket.connect("8.8.8.8:80").ok()?;
+      socket.local_addr().ok().map(|adresse| adresse.ip().to_string())
+    })
+    .clone()
   }
 
 /// Identité : `user@host`.
@@ -215,38 +249,46 @@ pub fn identite() -> String
     format!("{}@{}", utilisateur(), hote())
   }
 
-/// Nom d'OS et flavor lisibles.
+/// Nom d'OS et flavor lisibles, résolu une fois (lecture d'`/etc/os-release`).
 pub fn os_flavor() -> String
   {
-    let os = std::env::consts::OS;
-    if os == "linux"
-      && let Ok(os_release) = std::fs::read_to_string("/etc/os-release")
-      {
-        for ligne in os_release.lines()
-          {
-            if let Some(nom) = ligne.strip_prefix("PRETTY_NAME=")
-              {
-                return nom.trim_matches('"').to_string();
-              }
-          }
-      }
-    format!("{} ({})", os, std::env::consts::ARCH)
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+      let os = std::env::consts::OS;
+      if os == "linux"
+        && let Ok(os_release) = std::fs::read_to_string("/etc/os-release")
+        {
+          for ligne in os_release.lines()
+            {
+              if let Some(nom) = ligne.strip_prefix("PRETTY_NAME=")
+                {
+                  return nom.trim_matches('"').to_string();
+                }
+            }
+        }
+      format!("{} ({})", os, std::env::consts::ARCH)
+    })
+    .clone()
   }
 
-/// Code pays déduit de la locale (`fr_FR` → `FR`).
+/// Code pays déduit de la locale (`fr_FR` → `FR`), résolu une fois.
 pub fn code_pays() -> String
   {
-    let locale = std::env::var("LANG").or_else(|_| std::env::var("LC_ALL")).unwrap_or_default();
-    let locale = locale.split('.').next().unwrap_or("");
-    if let Some((_, pays)) = locale.split_once('_')
-      {
-        let pays = pays.split('@').next().unwrap_or("").to_ascii_uppercase();
-        if pays.len() == 2 && pays.chars().all(|c| c.is_ascii_alphabetic())
-          {
-            return pays;
-          }
-      }
-    "??".to_string()
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+      let locale = std::env::var("LANG").or_else(|_| std::env::var("LC_ALL")).unwrap_or_default();
+      let locale = locale.split('.').next().unwrap_or("");
+      if let Some((_, pays)) = locale.split_once('_')
+        {
+          let pays = pays.split('@').next().unwrap_or("").to_ascii_uppercase();
+          if pays.len() == 2 && pays.chars().all(|c| c.is_ascii_alphabetic())
+            {
+              return pays;
+            }
+        }
+      "??".to_string()
+    })
+    .clone()
   }
 
 /// Date et heure locales (complètes) et UTC (jour mois heure minute).

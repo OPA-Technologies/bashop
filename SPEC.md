@@ -34,6 +34,34 @@ shell tourne dans un pseudo-terminal enfant.
 - **Cadre toujours visible** : la ligne d'état et la ligne de contexte restent
   affichées même pendant `vi`, `less`, `man`.
 
+### 2.1 Anti-nidification et reprise de session
+
+Bashop est branché par **injection dans les rc** des shells (`bashop install`
+pose un bloc **idempotent** délimité `# >>> bashop >>>` … `# <<< bashop <<<`).
+Avant de lancer `bashop run`, la bootstrap vérifie trois choses :
+
+1. **Voie rapide (env)** : `BASHOP_ACTIVE=1` est transmis au shell enfant ; sa
+   simple présence suffit à ne pas relancer le cadre (couvre aussi Windows).
+2. **Remontée du parent** : `sudo -i` / `su -` réinitialisent l'environnement
+   (donc effacent `BASHOP_ACTIVE`) ; on remonte la chaîne des processus parents
+   (`/proc/<pid>/status` sous Linux, `ps -o ppid=`/`ps -o comm=` ailleurs) et on
+   s'arrête dès qu'un ancêtre est un binaire `bashop`. **C'est ce test qui
+   empêche le double cadre sous `sudo -i`.**
+3. **Multiplexeur** : sous `tmux`/`screen` (variables `TMUX`/`STY`), le cadre est
+   **désactivé** (mode dégradé) : le shell garde son prompt natif.
+
+`bashop run` **refuse** également de démarrer s'il détecte une nidification
+(cas d'un lancement manuel depuis un shell déjà encadré).
+
+Sous `sudo -i`/`su -`, le nouveau shell **reprend la session** (il n'ouvre pas
+un cadre imbriqué) : son `precmd` publie un OSC privé
+`ESC ] 1337 ; Bashop ; user=<u> ; priv=<root|wheel|classique> BEL`. Le cadre
+adopte aussitôt l'identité et le thème correspondants (`term_stat` affiche le
+`user@host` réel, `term_context` le badge `ROOT!`) ; à la sortie de root, le
+cadre revient à l'identité précédente. Le privilège est recalculé à chaque
+démarrage de shell (une nouvelle session sous `sudo -i` source à nouveau la
+bootstrap), jamais par fork à chaque prompt.
+
 ## 3. Cadre (3 lignes)
 
 Pour un terminal de `N` lignes :
@@ -124,6 +152,12 @@ zone centrale.
 Les **pop-ups** (F1, F10) recouvrent la **zone centrale** uniquement : les 3
 lignes du cadre (stat, prompt, context) restent visibles.
 
+- **Souris déléguée** : si le programme lancé active le suivi souris
+  (DECSET `1000`/`1002`/`1003`, encodage `1006`/`1015`), les événements souris
+  lui sont **transmis** ; sinon la molette fait défiler l'historique.
+- **Écran alterné** : `DECSET 1049` sauvegarde grille et curseur et les
+  restaure à la sortie (le scrollback survit à `vim`/`less`).
+
 ## 5. Thèmes et prompt
 
 Un thème décrit le **suffixe** affiché et les couleurs. Trois thèmes fournis :
@@ -182,7 +216,10 @@ alerte et propose, l'utilisateur décide.
 - **Gating de l'Entrée** au prompt : analyse de la ligne avant exécution, suivie
   d'un **overlay de confirmation** si un risque est détecté.
 - Détection de **commandes destructrices** (`rm -rf /`, `dd`, `mkfs`, …).
-- **Paste safety** : avertir avant exécution d'un collage multi-lignes suspect.
+- **Paste safety** : un collage **multi-lignes** ouvre un **overlay de
+  confirmation** (aperçu des premières lignes) avant transmission ; le
+  *bracketed paste* est respecté (DECSET `2004`) si le programme enfant l'a
+  activé. Avertir avant exécution d'un collage suspect.
 - Détection de **secrets** dans la ligne.
 - Correction « **vouliez-vous dire ?** » pour les commandes proches d'une
   commande connue.
@@ -203,6 +240,13 @@ alerte et propose, l'utilisateur décide.
 - **Horodatage optionnel** des commandes.
 - Mode **dégradé** si le terminal ne supporte pas les capacités requises.
 - **Rappel de touches** toujours présent dans `term_context`.
+- **Restauration terminal** : `SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT` (et le hook
+  de panique) rétablissent termios, écran alterné, souris, fond et curseur, puis
+  tuent l'enfant ; le redimensionnement (`SIGWINCH`/crossterm) répercute la
+  taille sur le PTY.
+- **Fournisseurs en cache** : FQDN, IP locale, identité, flavor OS, pays et
+  privilège sont résolus **une fois** (`OnceLock`) ; la charge système est lue
+  au tick de 0,5 s, jamais à chaque rendu.
 
 ## 10. Configuration — `~/.opshellrc`
 
@@ -232,8 +276,11 @@ src/
   config.rs      lecture ~/.opshellrc (KEY=VALUE) + tests
   theme.rs       themes, suffixe, couleurs + tests
   lexer.rs       decoupage et detection de declencheur + tests
-  detect.rs      OS, arch, shell, privilege
-  observe.rs     observation des frappes
+  detect.rs      OS, arch, shell, privilege, anti-nidification
+  install.rs     injection/retrait idempotent du bloc dans les rc
+  bootstrap.rs   contenu du bloc (rc bash/zsh, OSC 1337, PROMPT_COMMAND)
+  observe.rs     observation des frappes (OSC 133 + repli idle)
+  restauration.rs restauration terminal (signaux + RAII + hook panique)
   safety.rs      garde-fous (commandes destructrices, secrets)
   providers.rs   fournisseurs de suggestions (~ help, man, historique)
   shells.rs      noms et resolution des shells + tests

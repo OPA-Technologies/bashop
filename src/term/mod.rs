@@ -11,7 +11,32 @@ pub mod parser;
 
 use grid::{Cellule, Couleur, Grid};
 
+pub use crate::detect::Privilege;
 pub use crate::observe::EtatShell;
+
+/// Protocole de suivi souris activé par le programme enfant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourisMode
+  {
+    /// Aucun suivi (molette = historique).
+    Aucune,
+    /// X10 (DECSET 9).
+    X10,
+    /// Boutons (DECSET 1000).
+    Bouton,
+    /// Boutons + déplacement (DECSET 1002).
+    BoutonMouvement,
+    /// Tout déplacement (DECSET 1003).
+    Mouvement,
+  }
+
+/// Sauvegarde d'écran pour l'écran alterné (DECSET 1049).
+#[derive(Clone, Debug)]
+struct EcranSauve
+  {
+    grid: Grid,
+    curseur_visible: bool,
+  }
 
 /// Émulateur de la zone centrale.
 #[derive(Debug)]
@@ -43,6 +68,19 @@ pub struct Terminal
     pub dernier_statut: Option<i32>,
     /// Titre de fenêtre demandé par l'enfant (OSC 0/2), si connu.
     pub titre: String,
+    /// Identité publiée par le shell (OSC privé `1337;Bashop;user=…`).
+    pub utilisateur: Option<String>,
+    /// Privilège publié par le shell (OSC privé `1337;Bashop;priv=…`).
+    pub privilege: Option<Privilege>,
+    /// Protocole de suivi souris actif.
+    pub souris: SourisMode,
+    /// Encodage souris SGR (DECSET 1006).
+    pub souris_sgr: bool,
+    /// Encodage souris urxvt (DECSET 1015).
+    pub souris_utf8: bool,
+    /// Collage encadré actif (DECSET 2004).
+    pub paste_bracketed: bool,
+    ecran_alterne: Option<EcranSauve>,
     sauvegarde: Option<(u16, u16)>,
   }
 
@@ -65,6 +103,13 @@ impl Terminal
           col_commande: 0,
           dernier_statut: None,
           titre: String::new(),
+          utilisateur: None,
+          privilege: None,
+          souris: SourisMode::Aucune,
+          souris_sgr: false,
+          souris_utf8: false,
+          paste_bracketed: false,
+          ecran_alterne: None,
           sauvegarde: None,
         }
       }
@@ -247,6 +292,36 @@ impl Terminal
             1 => self.grid.effacer_ligne_jusqua(lig, col, modele),
             _ => self.grid.effacer_ligne(lig, 0, modele),
           }
+      }
+
+    /// Bascule l'écran alterné : sauvegarde à l'entrée, restaure à la sortie.
+    pub(crate) fn ecran_alterne(&mut self, actif: bool)
+      {
+        if actif
+          {
+            if self.ecran_alterne.is_none()
+              {
+                self.ecran_alterne = Some(EcranSauve {
+                  grid: self.grid.clone(),
+                  curseur_visible: self.curseur_visible,
+                });
+              }
+            let modele = self.cellule_effacement();
+            self.grid.effacer_ecran(modele);
+            self.grid.curseur_lig = 0;
+            self.grid.curseur_col = 0;
+          }
+        else if let Some(sauve) = self.ecran_alterne.take()
+          {
+            self.grid = sauve.grid;
+            self.curseur_visible = sauve.curseur_visible;
+          }
+      }
+
+    /// Indique si le programme enfant a activé un suivi souris.
+    pub fn suivi_souris(&self) -> bool
+      {
+        self.souris != SourisMode::Aucune
       }
 
     /// Extrait la commande en cours de saisie (après OSC 133;B).

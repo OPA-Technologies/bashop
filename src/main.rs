@@ -18,11 +18,41 @@ fn main() -> Result<()>
           }
         Command::Install { shell } =>
           {
-            println!("bashop install — shell={:?} (bootstrap à finaliser en M4)", shell);
+            let cible = shell.as_deref().and_then(Shell::par_nom);
+            if shell.is_some() && cible.is_none()
+              {
+                println!("Shell inconnu : {}", shell.as_deref().unwrap_or(""));
+              }
+            else
+              {
+                let touches = bashop::install::installer(cible);
+                if touches.is_empty()
+                  {
+                    println!("bashop install : aucun rc modifié (shell non pris en charge ou déjà à jour)");
+                  }
+                else
+                  {
+                    for chemin in touches
+                      {
+                        println!("bootstrap posé : {}", chemin.display());
+                      }
+                  }
+              }
           }
         Command::Uninstall =>
           {
-            println!("bashop uninstall (bootstrap à finaliser en M4)");
+            let touches = bashop::install::desinstaller();
+            if touches.is_empty()
+              {
+                println!("bashop uninstall : aucune trace à retirer");
+              }
+            else
+              {
+                for chemin in touches
+                  {
+                    println!("bootstrap retiré : {}", chemin.display());
+                  }
+              }
           }
         Command::Config =>
           {
@@ -39,6 +69,13 @@ fn main() -> Result<()>
         Command::Capture { state } =>
           {
             println!("bashop capture {state} (persistance à finaliser en M4)");
+          }
+        Command::Guard =>
+          {
+            if !bashop::detect::autoriser_cadre()
+              {
+                std::process::exit(1);
+              }
           }
       }
     Ok(())
