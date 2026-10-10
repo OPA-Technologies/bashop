@@ -138,11 +138,11 @@ zone centrale.
 
 | Touche     | Action |
 |------------|--------|
-| `F1`       | Aide contextuelle de la commande en cours de saisie : `man` si disponible, sinon `--help` (fork du binaire). |
+| `F1`       | Aide contextuelle de la commande en cours de saisie : `--help` d'abord (fork borné), sinon page `man` (bornée), sinon historique. |
 | `Ctrl+F1`  | Complète la ligne par une **suggestion fantôme** (ghost-text) à droite du curseur : options de `--help` d'abord, puis historique. |
 | `PagePréc` / `PageSuiv` | Défilement (respectivement vers les entrées plus anciennes / le bas), avec la **molette** dispo en continu. |
-| `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** (dont bascule du mode capture). |
-| `F2`       | Bascule le **mode capture** on/off. |
+| `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** : `F2` y bascule le mode capture, `F10` rafraîchit. |
+| `F2`       | Bascule le **mode capture** on/off (session courante, persistable via `bashop capture`). |
 
 - **Historique défilant** : les lignes évincées de la zone centrale sont
   conservées (10 000 lignes max) et redeviennent consultables par le défilement.
@@ -230,14 +230,21 @@ alerte et propose, l'utilisateur décide.
 ## 8. Mode capture
 
 - **Implémenté** et **actif par défaut**.
-- Masque à l'affichage : **IP, MAC, hostname, secrets**.
-- Bascule par `F2`, par le **menu `F10`**, et par la sous-commande CLI
-  `bashop capture`.
+- Masque à l'affichage de la zone centrale : **IP, MAC, hostname/FQDN, secrets**
+  (remplacements à longueur constante, la mise en page n'est pas décalée).
+- Bascule par `F2` (session courante), par le **menu `F10`**, et par la
+  sous-commande CLI `bashop capture on|off|toggle` qui **persiste** la valeur
+  dans `~/.opshellrc` (`CAPTURE=`).
 
 ## 9. Productivité et robustesse
 
-- **Notification de fin de commande longue** (seuil configurable).
-- **Horodatage optionnel** des commandes.
+- **Notification de fin de commande longue** : quand une commande dure plus de
+  `NOTIFICATION_SEUIL` secondes (défaut 5), son retour au prompt (marqueur
+  `OSC 133;A`, garanti bash/zsh) affiche pendant quelques secondes
+  `⏱ terminée en N s` au centre de `term_context`. Désactivable par
+  `NOTIFICATION=off`.
+- **Horodatage optionnel** des commandes : avec `HORODATAGE=on`, l'heure de
+  lancement (`🕐 HH:MM:SS`) s'affiche au centre de `term_context`.
 - Mode **dégradé** si le terminal ne supporte pas les capacités requises.
 - **Rappel de touches** toujours présent dans `term_context`.
 - **Restauration terminal** : `SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT` (et le hook
@@ -261,7 +268,10 @@ Clés reconnues (extrait) :
 | `THEME` | Thème de prompt (`classique`, `wheel`, `root`). |
 | `TRIGGERS` | Tokens déclenchant la bascule root (défaut `sudo doas su sudoedit`). |
 | `SUFFIX_WIDTH` | Largeur normalisée du champ suffixe (défaut `6`). |
-| `CAPTURE` | Mode capture `on`/`off` (défaut `on`). |
+| `CAPTURE` | Mode capture `on`/`off` (défaut `on`) ; réécrit par `bashop capture`. |
+| `NOTIFICATION` | Notification de fin de commande longue `on`/`off` (défaut `on`). |
+| `NOTIFICATION_SEUIL` | Durée minimale en secondes (défaut `5`). |
+| `HORODATAGE` | Horodatage des commandes `on`/`off` (défaut `off`). |
 
 `bashop config` ouvre l'interface de configuration (via `op-tui`). La règle
 « ne jamais éditer un fichier déployé à la main » s'applique aussi aux rc.

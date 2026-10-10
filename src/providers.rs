@@ -302,6 +302,14 @@ pub fn horloge() -> (String, String)
     (local, utc)
   }
 
+/// Heure locale au format `HH:MM:SS`.
+pub fn heure() -> String
+  {
+    let format = time::macros::format_description!("[hour]:[minute]:[second]");
+    let maintenant = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    maintenant.format(&format).unwrap_or_default()
+  }
+
 /// Drapeau (indicateurs régionaux Unicode) d'un code pays à deux lettres.
 pub fn drapeau(code: &str) -> String
   {
@@ -473,12 +481,15 @@ fn debit_lisible(octets_par_seconde: f64) -> String
 
 /// Masque les données sensibles d'une chaîne (mode capture).
 ///
-/// Masque les adresses IPv4, les adresses MAC et les affectations de secrets.
+/// Masque les adresses IPv4, les adresses MAC, les affectations de secrets,
+/// ainsi que le nom d'hôte court et le FQDN (remplacés par des `#` à longueur
+/// constante pour ne pas décaler la mise en page).
 pub fn masquer(texte: &str) -> String
   {
     let masque_ip = masquer_ipv4(texte);
     let masque_mac = masquer_mac(&masque_ip);
-    masquer_secrets(&masque_mac)
+    let masque_secrets = masquer_secrets(&masque_mac);
+    masquer_host(&masque_secrets)
   }
 
 fn masquer_ipv4(texte: &str) -> String
@@ -594,6 +605,70 @@ fn masquer_secrets(texte: &str) -> String
     texte.to_string()
   }
 
+/// Remplace les occurrences isolées du nom d'hôte court et du FQDN par des
+/// `#` de même longueur (les séparateurs `.`/`-` sont conservés).
+fn masquer_host(texte: &str) -> String
+  {
+    let fqdn = fqdn();
+    let hote = hote();
+    let mut portee: Vec<(usize, usize)> = Vec::new();
+    for nom in [fqdn.as_str(), hote.as_str()]
+      {
+        if nom.is_empty()
+          {
+            continue;
+          }
+        let mut position = 0;
+        while let Some(relatif) = texte[position..].find(nom)
+          {
+            let debut = position + relatif;
+            let fin = debut + nom.len();
+            let avant_ok = debut == 0
+              || !texte[..debut].chars().next_back().is_some_and(borne_identifiant);
+            let apres_ok = fin == texte.len()
+              || !texte[fin..].chars().next().is_some_and(borne_identifiant);
+            if avant_ok
+              && apres_ok
+              && !portee.iter().any(|(o, f)| debut < *f && *o < fin)
+              {
+                portee.push((debut, fin));
+              }
+            position = fin;
+          }
+      }
+    portee.sort_unstable();
+    let mut sortie = String::with_capacity(texte.len());
+    let mut courant = 0;
+    for (debut, fin) in portee
+      {
+        if fin <= courant
+          {
+            continue;
+          }
+        sortie.push_str(&texte[courant..debut]);
+        for c in texte[debut..fin].chars()
+          {
+            if c.is_ascii_alphanumeric()
+              {
+                sortie.push('#');
+              }
+            else
+              {
+                sortie.push(c);
+              }
+          }
+        courant = fin;
+      }
+    sortie.push_str(&texte[courant..]);
+    sortie
+  }
+
+/// Borne de mot : un caractère qui empêche un masquage au milieu d'un identifiant.
+fn borne_identifiant(c: char) -> bool
+  {
+    c.is_alphanumeric() || c == '_'
+  }
+
 #[cfg(test)]
 mod tests
   {
@@ -615,6 +690,42 @@ mod tests
     fn le_texte_ordinaire_est_intact()
       {
         assert_eq!(masquer("ls -la /tmp"), "ls -la /tmp");
+      }
+
+    #[test]
+    fn le_nom_d_hote_est_masque_sans_perte_de_longueur()
+      {
+        let nom = hote();
+        let texte = format!("connexion à {nom} terminée");
+        let masque = masquer(&texte);
+        assert!(!masque.contains(&nom), "hostname non masqué : {masque}");
+        assert_eq!(masque.len(), texte.len(), "longueur modifiée : {masque}");
+        assert!(masque.contains('#'), "aucun remplacement : {masque}");
+      }
+
+    #[test]
+    fn le_fqdn_est_masque_entierement()
+      {
+        let fqdn = fqdn();
+        let texte = format!("serveur={fqdn}");
+        let masque = masquer(&texte);
+        assert!(!masque.contains(&fqdn), "fqdn non masqué : {masque}");
+        assert!(masque.starts_with("serveur="));
+      }
+
+    #[test]
+    fn le_nom_d_hote_en_milieu_de_mot_n_est_pas_touche()
+      {
+        let nom = hote();
+        let texte = format!("xx{nom}yy");
+        assert_eq!(masquer(&texte), texte);
+      }
+
+    #[test]
+    fn l_heure_locale_a_le_format_attendu()
+      {
+        let h = heure();
+        assert_eq!(h.chars().count(), 8, "format HH:MM:SS attendu : {h}");
       }
 
     #[test]

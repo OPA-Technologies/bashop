@@ -45,7 +45,7 @@ pub enum Command
         /// Shell ciblé (bash, zsh, sh, powershell, cmd).
         shell: String,
       },
-    /// Active ou désactive le mode capture (masquage à l'affichage).
+    /// Active, désactive ou bascule le mode capture (persisté dans `~/.opshellrc`).
     Capture
       {
         /// État demandé : on, off ou toggle.

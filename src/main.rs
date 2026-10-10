@@ -68,7 +68,18 @@ fn main() -> Result<()>
           }
         Command::Capture { state } =>
           {
-            println!("bashop capture {state} (persistance à finaliser en M4)");
+            let actif = match state.to_ascii_lowercase().as_str()
+              {
+                "on" => true,
+                "off" => false,
+                "toggle" => !config::charger().capture,
+                _ => {
+                  println!("État attendu : on, off ou toggle (reçu : {state})");
+                  return Ok(());
+                }
+              };
+            config::fixer_capture(actif)?;
+            println!("Mode capture : {}", if actif { "on" } else { "off" });
           }
         Command::Guard =>
           {

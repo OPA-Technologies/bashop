@@ -6,6 +6,7 @@
 //! conservées dans `inconnues` pour ne rien perdre à la réécriture.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// Thème par défaut (`auto` = selon le privilège détecté).
 pub const THEME_DEFAUT: &str = "auto";
@@ -13,6 +14,12 @@ pub const THEME_DEFAUT: &str = "auto";
 pub const SUFFIX_WIDTH_DEFAUT: u16 = 6;
 /// Commandes déclenchant la bascule automatique vers le thème root.
 pub const TRIGGERS_DEFAUT: &[&str] = &["sudo", "doas", "su", "sudoedit"];
+/// Notification de fin de commande longue active par défaut.
+pub const NOTIFICATION_DEFAUT: bool = true;
+/// Durée minimale (secondes) d'une commande pour être notifiée.
+pub const SEUIL_NOTIFICATION_DEFAUT: u64 = 5;
+/// Horodatage des commandes désactivé par défaut.
+pub const HORODATAGE_DEFAUT: bool = false;
 
 /// Configuration utilisateur.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +33,12 @@ pub struct Config
     pub suffix_width: u16,
     /// Mode capture actif (masquage à l'affichage).
     pub capture: bool,
+    /// Notification à la fin d'une commande longue.
+    pub notification: bool,
+    /// Durée minimale (s) déclenchant la notification.
+    pub seuil_notification: u64,
+    /// Horodatage des commandes dans `term_context`.
+    pub horodatage: bool,
     /// Clés non reconnues, conservées telles quelles.
     pub inconnues: BTreeMap<String, String>,
   }
@@ -39,6 +52,9 @@ impl Default for Config
           triggers: TRIGGERS_DEFAUT.iter().map(|s| (*s).to_string()).collect(),
           suffix_width: SUFFIX_WIDTH_DEFAUT,
           capture: true,
+          notification: NOTIFICATION_DEFAUT,
+          seuil_notification: SEUIL_NOTIFICATION_DEFAUT,
+          horodatage: HORODATAGE_DEFAUT,
           inconnues: BTreeMap::new(),
         }
       }
@@ -67,6 +83,47 @@ fn lire_bool(valeur: &str) -> Option<bool>
         "off" | "false" | "0" | "no" | "non" => Some(false),
         _ => None,
       }
+  }
+
+/// Récrit `~/.opshellrc` avec la valeur de `CAPTURE` demandée, en préservant
+/// toutes les autres lignes (commentaires, clés inconnues, autres réglages).
+pub fn fixer_capture(actif: bool) -> std::io::Result<()>
+  {
+    let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME absent"))?;
+    fixer_capture_dans(PathBuf::from(home).join(".opshellrc"), actif)
+  }
+
+/// Variante testable de [`fixer_capture`], sur un chemin explicite.
+pub fn fixer_capture_dans(chemin: PathBuf, actif: bool) -> std::io::Result<()>
+  {
+    let valeur = if actif { "on" } else { "off" };
+    let contenu = std::fs::read_to_string(&chemin).unwrap_or_default();
+    let mut trouvée = false;
+    let mut lignes: Vec<String> = Vec::new();
+    for ligne in contenu.lines()
+      {
+        let cle = ligne
+          .trim_start()
+          .split(['=', ' '])
+          .next()
+          .unwrap_or("")
+          .trim()
+          .to_ascii_uppercase();
+        if cle == "CAPTURE"
+          {
+            lignes.push(format!("CAPTURE={valeur}"));
+            trouvée = true;
+          }
+        else
+          {
+            lignes.push(ligne.to_string());
+          }
+      }
+    if !trouvée
+      {
+        lignes.push(format!("CAPTURE={valeur}"));
+      }
+    std::fs::write(&chemin, lignes.join("\n") + "\n")
   }
 
 /// Analyse le contenu de `~/.opshellrc` et complète les valeurs par défaut.
@@ -105,6 +162,22 @@ pub fn analyser(contenu: &str) -> Config
               if let Some(actif) = lire_bool(valeur)
                 {
                   config.capture = actif;
+                }
+            }
+            "NOTIFICATION" | "NOTIF" => {
+              if let Some(actif) = lire_bool(valeur)
+                {
+                  config.notification = actif;
+                }
+            }
+            "NOTIFICATION_SEUIL" | "SEUIL_NOTIFICATION" => {
+              let seuil = valeur.parse::<u64>().unwrap_or(SEUIL_NOTIFICATION_DEFAUT);
+              config.seuil_notification = seuil.max(1);
+            }
+            "HORODATAGE" | "TIMESTAMP" => {
+              if let Some(actif) = lire_bool(valeur)
+                {
+                  config.horodatage = actif;
                 }
             }
             _ => {
@@ -156,5 +229,52 @@ mod tests
       {
         let c = analyser("COULEUR_PERSO=#112233");
         assert_eq!(c.inconnues.get("COULEUR_PERSO").map(String::as_str), Some("#112233"));
+      }
+
+    #[test]
+    fn notification_et_horodatage_sont_lus()
+      {
+        let c = analyser("NOTIFICATION=on\nNOTIFICATION_SEUIL=8\nHORODATAGE=yes");
+        assert!(c.notification);
+        assert_eq!(c.seuil_notification, 8);
+        assert!(c.horodatage);
+      }
+
+    #[test]
+    fn un_seuil_invalide_revient_a_la_valeur_par_defaut()
+      {
+        let c = analyser("NOTIFICATION_SEUIL=abc");
+        assert_eq!(c.seuil_notification, SEUIL_NOTIFICATION_DEFAUT);
+        let c = analyser("NOTIFICATION_SEUIL=0");
+        assert_eq!(c.seuil_notification, 1);
+      }
+
+    #[test]
+    fn le_fichier_de_capture_est_recrit_sans_perte_des_autres_cles()
+      {
+        let dossier = std::env::temp_dir().join(format!("bashop-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let chemin = dossier.join(".opshellrc");
+        std::fs::write(&chemin, "# commentaire\nTHEME=wheel\nCAPTURE=on\n").unwrap();
+        fixer_capture_dans(chemin.clone(), false).unwrap();
+        let contenu = std::fs::read_to_string(&chemin).unwrap();
+        assert!(contenu.contains("THEME=wheel"));
+        assert!(contenu.contains("CAPTURE=off"));
+        assert!(contenu.contains("# commentaire"));
+        let _ = std::fs::remove_file(&chemin);
+        let _ = std::fs::remove_dir(dossier);
+      }
+
+    #[test]
+    fn la_cle_capture_est_ajoutee_quand_absente()
+      {
+        let dossier = std::env::temp_dir().join(format!("bashop-cfg2-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let chemin = dossier.join(".opshellrc");
+        fixer_capture_dans(chemin.clone(), true).unwrap();
+        let contenu = std::fs::read_to_string(&chemin).unwrap();
+        assert!(contenu.contains("CAPTURE=on"));
+        let _ = std::fs::remove_file(&chemin);
+        let _ = std::fs::remove_dir(dossier);
       }
   }

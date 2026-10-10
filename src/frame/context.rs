@@ -12,6 +12,8 @@ pub const TEXTE: (u8, u8, u8) = (0xE6, 0xED, 0xF3);
 pub const VERT: (u8, u8, u8) = (0x89, 0xD1, 0x85);
 /// Couleur du code retour en erreur.
 pub const ROUGE: (u8, u8, u8) = (0xFF, 0x6B, 0x6B);
+/// Couleur d'une notification de fin de commande longue.
+pub const JAUNE: (u8, u8, u8) = (0xF9, 0xE2, 0xAF);
 
 /// Vue du contexte au moment du rendu.
 #[derive(Clone, Debug, Default)]
@@ -31,6 +33,10 @@ pub struct Contexte
     pub overlay: bool,
     /// Compteurs système compacts (cpu/mémoire/io), déjà mis en forme.
     pub systeme: String,
+    /// Notification de fin de commande longue (transitoire).
+    pub notification: Option<String>,
+    /// Horodatage de lancement de la dernière commande, le cas échéant.
+    pub horodatage: Option<String>,
   }
 
 /// Zone gauche : rappel des touches, options découvertes et suggestion.
@@ -60,7 +66,8 @@ pub fn gauche(contexte: &Contexte) -> String
     fragments.join("   ")
   }
 
-/// Zone centre : alerte root et code retour (`ok` / `✗ N`).
+/// Zone centre : alerte root, code retour (`ok` / `✗ N`), notification de fin
+/// de commande longue et horodatage de lancement.
 pub fn centre(contexte: &Contexte) -> String
   {
     let mut fragments: Vec<String> = Vec::new();
@@ -72,6 +79,14 @@ pub fn centre(contexte: &Contexte) -> String
       {
         fragments.push(if code == 0 { "✓ ok".to_string() } else { format!("✗ {code}") });
       }
+    if let Some(notification) = &contexte.notification
+      {
+        fragments.push(notification.clone());
+      }
+    if let Some(horodatage) = &contexte.horodatage
+      {
+        fragments.push(horodatage.clone());
+      }
     fragments.join(" ")
   }
 
@@ -81,7 +96,7 @@ pub fn droite(contexte: &Contexte) -> String
     contexte.systeme.clone()
   }
 
-/// Couleur de la zone centre selon le code retour.
+/// Couleur de la zone centre selon le code retour et la notification.
 pub fn couleur_centre(contexte: &Contexte) -> (u8, u8, u8)
   {
     match contexte.statut
@@ -89,6 +104,7 @@ pub fn couleur_centre(contexte: &Contexte) -> (u8, u8, u8)
         Some(0) => VERT,
         Some(_) => ROUGE,
         None if contexte.root => ROUGE,
+        None if contexte.notification.is_some() => JAUNE,
         None => TEXTE,
       }
   }
@@ -130,5 +146,29 @@ mod tests
         let contexte = Contexte { root: true, ..Contexte::default() };
         assert!(centre(&contexte).contains("ROOT!"));
         assert_eq!(couleur_centre(&contexte), ROUGE);
+      }
+
+    #[test]
+    fn la_notification_de_fin_de_commande_est_affichee_en_jaune()
+      {
+        let contexte = Contexte {
+          notification: Some("⏱ terminée en 12 s".to_string()),
+          ..Contexte::default()
+        };
+        assert!(centre(&contexte).contains("12 s"));
+        assert_eq!(couleur_centre(&contexte), JAUNE);
+      }
+
+    #[test]
+    fn l_horodatage_et_la_notification_cohabitent()
+      {
+        let contexte = Contexte {
+          notification: Some("⏱ terminée en 8 s".to_string()),
+          horodatage: Some("🕐 18:05:33".to_string()),
+          ..Contexte::default()
+        };
+        let centre = centre(&contexte);
+        assert!(centre.contains("8 s"));
+        assert!(centre.contains("18:05:33"));
       }
   }

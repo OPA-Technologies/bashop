@@ -163,6 +163,9 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       charge: providers::charge(),
       derniere_maj: Instant::now(),
       dernier_flux: Instant::now(),
+      demarrage_commande: None,
+      instant_commande: None,
+      notification: None,
       quitter: false,
     };
 
@@ -218,6 +221,9 @@ struct App
     charge: String,
     derniere_maj: Instant,
     dernier_flux: Instant,
+    demarrage_commande: Option<Instant>,
+    instant_commande: Option<String>,
+    notification: Option<(String, Instant)>,
     quitter: bool,
   }
 
@@ -243,6 +249,7 @@ impl App
                       self.term.alimenter(&mut self.parser, &octets);
                       self.dernier_flux = Instant::now();
                       self.rafraichir_privilege();
+                      self.sur_fin_commande();
                       sale = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -379,6 +386,7 @@ impl App
                       self.ecrivain.flush()?;
                       self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
                       self.term.etat = EtatShell::Commande;
+                      self.debuter_commande();
                     }
                 }
                 _ => {
@@ -386,6 +394,23 @@ impl App
                 }
               }
             self.overlay = None;
+            return Ok(());
+          }
+        if let Some(overlay) = &self.overlay
+          && overlay.nature == Nature::Information
+          && touche.code == KeyCode::F(10)
+          {
+            self.term.dernier_statut = None;
+            self.aide_bashop();
+            return Ok(());
+          }
+        if let Some(overlay) = &self.overlay
+          && overlay.nature == Nature::Information
+          && touche.code == KeyCode::F(2)
+          {
+            self.config.capture = !self.config.capture;
+            self.term.dernier_statut = None;
+            self.aide_bashop();
             return Ok(());
           }
         if self.overlay_decale_par(touche.code)
@@ -485,11 +510,46 @@ impl App
         self.ecrivain.flush()?;
         self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
         self.term.etat = EtatShell::Commande;
+        self.debuter_commande();
         self.suggestion = None;
         self.ghost = None;
         self.decalage = 0;
         self.overlay = None;
         Ok(())
+      }
+
+    /// Marque le début d'une commande : mémorise l'instant de lancement (pour
+    /// la notification de fin) et l'heure (horodatage optionnel).
+    fn debuter_commande(&mut self)
+      {
+        self.demarrage_commande = Some(Instant::now());
+        if self.config.horodatage
+          {
+            self.instant_commande = Some(format!("🕐 {}", providers::heure()));
+          }
+        self.notification = None;
+      }
+
+    /// Détecte le retour au prompt (OSC 133;A) après une commande : si elle a
+    /// dépassé le seuil, publie une notification transitoire (`term_context`).
+    fn sur_fin_commande(&mut self)
+      {
+        let Some(demarrage) = self.demarrage_commande.take()
+          else
+            {
+              return;
+            };
+        if self.term.etat != EtatShell::Prompt
+          {
+            self.demarrage_commande = Some(demarrage);
+            return;
+          }
+        let duree = demarrage.elapsed();
+        if self.config.notification && duree >= Duration::from_secs(self.config.seuil_notification)
+          {
+            let texte = format!("⏱ terminée en {}", format_duree(duree));
+            self.notification = Some((texte, Instant::now()));
+          }
       }
 
     /// Fait défiler la vue de `delta` lignes (<0 vers le haut, >0 vers le bas).
@@ -860,7 +920,9 @@ impl App
           format!("root    : {}", if self.root_actif() { "oui" } else { "non" }),
         ];
         self.overlay_decalage = 0;
-        self.overlay = Some(Overlay::information("Aide de Bashop", lignes));
+        let mut surcouche = Overlay::information("Aide de Bashop", lignes);
+        surcouche.aide = "F2 capture · F10 rafraîchit · Échap ferme".to_string();
+        self.overlay = Some(surcouche);
       }
 
     fn dessiner(&self, cadre: &mut ratatui::Frame)
@@ -873,6 +935,11 @@ impl App
                 Some((reste, complet)) => (Some(reste), Some(complet)),
                 None => (None, self.suggestion.clone()),
               },
+          };
+        let notification = match &self.notification
+          {
+            Some((texte, moment)) if moment.elapsed() < Duration::from_secs(6) => Some(texte.clone()),
+            _ => None,
           };
         let vue = Vue {
           term: &self.term,
@@ -887,6 +954,8 @@ impl App
           overlay_decalage: self.overlay_decalage,
           systeme: self.systeme.texte.clone(),
           overlay: self.overlay.as_ref(),
+          notification,
+          horodatage: self.instant_commande.clone(),
         };
         vue.dessiner(cadre);
       }
@@ -907,6 +976,8 @@ struct Vue<'a>
     overlay_decalage: usize,
     systeme: String,
     overlay: Option<&'a Overlay>,
+    notification: Option<String>,
+    horodatage: Option<String>,
   }
 
 impl Vue<'_>
@@ -939,6 +1010,8 @@ impl Vue<'_>
           suggestion: self.suggestion.clone(),
           overlay: self.overlay.is_some(),
           systeme: self.systeme.clone(),
+          notification: self.notification.clone(),
+          horodatage: self.horodatage.clone(),
         };
         cadre.render_widget(
           Paragraph::new(ligne_contexte(&contexte, largeur)),
@@ -1389,14 +1462,25 @@ fn charger_historique() -> Vec<String>
 /// s'il dépasse `delai` (évite tout gel/blocage sur un `--help` capricieux).
 fn sortie_avec_delai(programme: &str, argument: &str, delai: Duration) -> Option<std::process::Output>
   {
+    sortie_avec_delai_env(programme, argument, delai, &[])
+  }
+
+/// Variante de [`sortie_avec_delai`] avec variables d'environnement à poser.
+fn sortie_avec_delai_env(
+    programme: &str,
+    argument: &str,
+    delai: Duration,
+    environnement: &[(&str, &str)],
+  ) -> Option<std::process::Output>
+  {
     use std::process::{Command, Stdio};
-    let mut enfant = Command::new(programme)
-      .arg(argument)
-      .stdin(Stdio::null())
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn()
-      .ok()?;
+    let mut commande = Command::new(programme);
+    commande.arg(argument).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for (cle, valeur) in environnement
+      {
+        commande.env(cle, valeur);
+      }
+    let mut enfant = commande.spawn().ok()?;
     let limite = Instant::now() + delai;
     loop
       {
@@ -1412,6 +1496,51 @@ fn sortie_avec_delai(programme: &str, argument: &str, delai: Duration) -> Option
             Err(_) => return None,
           }
       }
+  }
+
+/// Nettoie la sortie de `man` : retire les gras/soulignés par retour arrière
+/// (`A\x08A`) et les retours chariot.
+fn nettoyer_man(texte: &str) -> String
+  {
+    let mut sortie = String::with_capacity(texte.len());
+    for caractere in texte.chars()
+      {
+        if caractere == '\u{0008}'
+          {
+            sortie.pop();
+          }
+        else
+          {
+            sortie.push(caractere);
+          }
+      }
+    sortie.replace('\r', "")
+  }
+
+/// Repli sur la page `man` de la commande (bornée), si disponible.
+fn aide_man(commande: &str) -> Option<Vec<String>>
+  {
+    let sortie = sortie_avec_delai_env("man", commande, Duration::from_secs(2), &[("MANWIDTH", "80")])?;
+    let texte = if sortie.stdout.is_empty()
+      {
+        String::from_utf8_lossy(&sortie.stderr).to_string()
+      }
+    else
+      {
+        String::from_utf8_lossy(&sortie.stdout).to_string()
+      };
+    let net = nettoyer_man(&texte);
+    if net.trim().is_empty()
+      {
+        return None;
+      }
+    Some(
+      net.lines()
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.trim().is_empty())
+        .take(200)
+        .collect(),
+    )
   }
 
 /// Exécute `commande --help` et renvoie sa sortie (bornée), si disponible.
@@ -1432,7 +1561,7 @@ fn aide_commande(commande: &str) -> Option<Vec<String>>
       };
     if texte.trim().is_empty()
       {
-        return None;
+        return aide_man(commande);
       }
     Some(texte.lines().take(200).map(|l| l.trim_end().to_string()).collect())
   }
@@ -1483,6 +1612,17 @@ fn options_du_help(commande: &str) -> Vec<String>
           }
       }
     options
+  }
+
+/// Formatte une durée en « N s » ou « M min S s ».
+fn format_duree(duree: Duration) -> String
+  {
+    let secondes = duree.as_secs();
+    if secondes < 60
+      {
+        return format!("{secondes} s");
+      }
+    format!("{} min {} s", secondes / 60, secondes % 60)
   }
 
 /// Répertoire de base pour les fichiers temporaires : `XDG_RUNTIME_DIR` si
@@ -1598,6 +1738,8 @@ mod tests
           overlay_decalage: 0,
           systeme: "CPU 5%  MEM 20%  IO 0 o/s".to_string(),
           overlay: None,
+          notification: None,
+          horodatage: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(100, 8)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
@@ -1626,6 +1768,8 @@ mod tests
           overlay_decalage: 0,
           systeme: String::new(),
           overlay: None,
+          notification: None,
+          horodatage: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(10, 2)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
@@ -1747,5 +1891,19 @@ mod tests
         };
         let enc = encoder_souris(&term, &ev).unwrap();
         assert_eq!(enc, vec![0x1b, b'[', b'M', 32 + 1, 32 + 10, 32 + 13]);
+      }
+
+    #[test]
+    fn la_sortie_de_man_est_nettoyee_des_surimpressions()
+      {
+        let net = nettoyer_man("H\x08H e\x08e y\x08y\r\nligne ligne");
+        assert_eq!(net, "H e y\nligne ligne");
+      }
+
+    #[test]
+    fn une_commande_sans_aide_tombe_sur_la_page_man()
+      {
+        let mots = aide_commande("env").unwrap_or_default();
+        assert!(!mots.is_empty(), "env --help ou man manquants");
       }
   }
