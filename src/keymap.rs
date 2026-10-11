@@ -9,8 +9,8 @@ pub enum Action
   {
     /// F1 — aide contextuelle (man / fork `--help`).
     AideContextuelle,
-    /// Ctrl+F1 — suggestion fantôme inline.
-    Suggestion,
+    /// Ctrl+F1 — page `man` de la commande en cours.
+    Man,
     /// F10 — aide de Bashop.
     AideBashop,
     /// F2 — bascule du mode capture.

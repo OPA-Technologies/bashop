@@ -14,6 +14,8 @@ pub const VERT: (u8, u8, u8) = (0x89, 0xD1, 0x85);
 pub const ROUGE: (u8, u8, u8) = (0xFF, 0x6B, 0x6B);
 /// Couleur d'une notification de fin de commande longue.
 pub const JAUNE: (u8, u8, u8) = (0xF9, 0xE2, 0xAF);
+/// Rappel compact des raccourcis du chrome.
+pub const TOUCHES: &str = "F1 - Aide rapide   F2 - Secret   F10 - Aide";
 
 /// Vue du contexte au moment du rendu.
 #[derive(Clone, Debug, Default)]
@@ -40,6 +42,9 @@ pub struct Contexte
     /// Alerte de risque sur la commande en cours de saisie (risque détecté ou
     /// simulation disponible).
     pub alerte: Option<String>,
+    /// Copie de la première ligne du message d'erreur de la dernière commande
+    /// (affichée avec le code retour), sans jamais altérer la sortie réelle.
+    pub derniere_erreur: Option<String>,
   }
 
 /// Zone gauche : rappel des touches, options découvertes et suggestion.
@@ -58,14 +63,7 @@ pub fn gauche(contexte: &Contexte) -> String
       {
         fragments.push(contexte.options.iter().take(4).cloned().collect::<Vec<_>>().join(" · "));
       }
-    if contexte.suggestion.is_some() || !contexte.options.is_empty()
-      {
-        fragments.push("F1 - Aide contextuelle   F10 - Aide   F2 - Capture".to_string());
-      }
-    else
-      {
-        fragments.push("F1 - Aide contextuelle   F10 - Aide   F2 - Capture   Ctrl+F1 - Suggestion".to_string());
-      }
+    fragments.push(TOUCHES.to_string());
     fragments.join("   ")
   }
 
@@ -84,7 +82,18 @@ pub fn centre(contexte: &Contexte) -> String
       }
     if let Some(code) = contexte.statut
       {
-        fragments.push(if code == 0 { "✓ ok".to_string() } else { format!("✗ {code}") });
+        if code == 0
+          {
+            fragments.push("✓ ok".to_string());
+          }
+        else if let Some(erreur) = &contexte.derniere_erreur
+          {
+            fragments.push(format!("✗ {code} — {erreur}"));
+          }
+        else
+          {
+            fragments.push(format!("✗ {code}"));
+          }
       }
     if let Some(notification) = &contexte.notification
       {
@@ -126,10 +135,9 @@ mod tests
     fn le_rappel_des_touches_est_toujours_present()
       {
         let ligne = gauche(&Contexte::default());
-        assert!(ligne.contains("F1 - Aide contextuelle"));
+        assert!(ligne.contains("F1 - Aide rapide"));
+        assert!(ligne.contains("F2 - Secret"));
         assert!(ligne.contains("F10 - Aide"));
-        assert!(ligne.contains("F2 - Capture"));
-        assert!(ligne.contains("Ctrl+F1 - Suggestion"));
       }
 
     #[test]
@@ -145,6 +153,20 @@ mod tests
       {
         let contexte = Contexte { statut: Some(2), ..Contexte::default() };
         assert_eq!(centre(&contexte), "✗ 2");
+        assert_eq!(couleur_centre(&contexte), ROUGE);
+      }
+
+    #[test]
+    fn le_message_d_erreur_accompagne_le_code_retour()
+      {
+        let contexte = Contexte {
+          statut: Some(127),
+          derniere_erreur: Some("bash: foo: command not found".to_string()),
+          ..Contexte::default()
+        };
+        let centre = centre(&contexte);
+        assert!(centre.starts_with("✗ 127"), "{centre}");
+        assert!(centre.contains("command not found"), "{centre}");
         assert_eq!(couleur_centre(&contexte), ROUGE);
       }
 

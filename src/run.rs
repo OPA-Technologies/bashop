@@ -161,7 +161,6 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       a_executer_simule: None,
       historique: charger_historique(),
       systeme: MesureSysteme::nouveau(),
-      charge: providers::charge(),
       derniere_maj: Instant::now(),
       dernier_flux: Instant::now(),
       demarrage_commande: None,
@@ -220,7 +219,6 @@ struct App
     a_executer_simule: Option<Vec<u8>>,
     historique: Vec<String>,
     systeme: MesureSysteme,
-    charge: String,
     derniere_maj: Instant,
     dernier_flux: Instant,
     demarrage_commande: Option<Instant>,
@@ -239,7 +237,6 @@ impl App
             if self.derniere_maj.elapsed() >= Duration::from_millis(500)
               {
                 self.systeme.maj();
-                self.charge = providers::charge();
                 self.derniere_maj = Instant::now();
                 sale = true;
               }
@@ -338,16 +335,19 @@ impl App
               {
                 KeyCode::F(1) if touche.modifiers.contains(KeyModifiers::CONTROL) => {
                   self.term.dernier_statut = None;
-                  self.completer();
+                  self.term.effacer_erreur();
+                  self.aide_man_courante();
                   return Ok(());
                 }
                 KeyCode::F(1) => {
                   self.term.dernier_statut = None;
+                  self.term.effacer_erreur();
                   self.aide_contextuelle();
                   return Ok(());
                 }
                 KeyCode::F(10) => {
                   self.term.dernier_statut = None;
+                  self.term.effacer_erreur();
                   self.aide_bashop();
                   return Ok(());
                 }
@@ -384,6 +384,7 @@ impl App
                 KeyCode::Char('o') | KeyCode::Char('y') | KeyCode::Enter => {
                   if let Some(octets) = self.a_executer.take()
                     {
+                      self.term.commande_lancee = self.term.commande_courante();
                       self.ecrivain.write_all(&octets)?;
                       self.ecrivain.flush()?;
                       self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
@@ -394,6 +395,7 @@ impl App
                 KeyCode::Char('d') if self.a_executer_simule.is_some() => {
                   if let Some(octets) = self.a_executer_simule.take()
                     {
+                      self.term.commande_lancee = texte_simulation(&octets);
                       self.ecrivain.write_all(&octets)?;
                       self.ecrivain.flush()?;
                       self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
@@ -415,6 +417,7 @@ impl App
           && touche.code == KeyCode::F(10)
           {
             self.term.dernier_statut = None;
+            self.term.effacer_erreur();
             self.aide_bashop();
             return Ok(());
           }
@@ -424,6 +427,7 @@ impl App
           {
             self.config.capture = !self.config.capture;
             self.term.dernier_statut = None;
+            self.term.effacer_erreur();
             self.aide_bashop();
             return Ok(());
           }
@@ -567,6 +571,7 @@ impl App
 
     fn executer_ligne(&mut self) -> Result<()>
       {
+        self.term.commande_lancee = self.term.commande_courante();
         self.ecrivain.write_all(b"\r")?;
         self.ecrivain.flush()?;
         self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
@@ -735,80 +740,6 @@ impl App
         crate::lexer::contient_declencheur(&commande, &self.config.triggers)
       }
 
-    fn completer(&mut self)
-      {
-        let commande = self.term.commande_courante();
-        if commande.trim().is_empty()
-          {
-            self.suggestion = Some("tapez d'abord une commande".to_string());
-            self.ghost = None;
-            return;
-          }
-        let jeton = commande.split_whitespace().last().unwrap_or("");
-        let prefixe_jeton = &commande[commande.len() - jeton.len()..];
-
-        let mut candidats: Vec<String> = self.options_courantes();
-        let mut manque_help = false;
-        if let Some(programme) = commande.split_whitespace().next()
-          && !programme.is_empty()
-          {
-            match self.options_help(programme)
-              {
-                Some(help) => {
-                  for option in help
-                    {
-                      if !candidats.iter().any(|c| c == &option)
-                        {
-                          candidats.push(option);
-                        }
-                    }
-                }
-                None => {
-                  self.charger_options_help(programme);
-                  manque_help = true;
-                }
-              }
-          }
-
-        if let Some(complet) = candidats
-          .iter()
-          .find(|c| c.starts_with(prefixe_jeton) && c.as_str() != jeton)
-          .cloned()
-          {
-            self.suggestion = Some(complet.clone());
-            self.ghost = Some(complet[prefixe_jeton.len()..].to_string());
-            return;
-          }
-
-        match self.meilleure_suggestion(&commande)
-          {
-            Some(suggestion) => {
-              let reste = if suggestion.starts_with(&commande)
-                {
-                  suggestion[commande.len()..].to_string()
-                }
-                else
-                  {
-                    String::new()
-                  };
-              self.ghost = Some(reste);
-              self.suggestion = Some(suggestion);
-            }
-            None => {
-              let message = if manque_help
-                {
-                  "aucune option connue (aide en cours de chargement)".to_string()
-                }
-                else
-                  {
-                    "aucune correspondance dans l'historique".to_string()
-                  };
-              self.suggestion = Some(message);
-              self.ghost = None;
-            }
-          }
-      }
-
     /// Options déjà extraites de `programme --help`, sans lancer de processus.
     fn options_help(&self, programme: &str) -> Option<Vec<String>>
       {
@@ -867,13 +798,19 @@ impl App
 
         let mut candidats: Vec<String> = self.options_courantes();
         if let Some(programme) = programme
-          && let Some(help) = self.options_help(programme)
           {
-            for option in help
+            if jeton.starts_with('-') && self.options_help(programme).is_none()
               {
-                if !candidats.iter().any(|c| c == &option)
+                self.charger_options_help(programme);
+              }
+            if let Some(help) = self.options_help(programme)
+              {
+                for option in help
                   {
-                    candidats.push(option);
+                    if !candidats.iter().any(|c| c == &option)
+                      {
+                        candidats.push(option);
+                      }
                   }
               }
           }
@@ -966,6 +903,29 @@ impl App
         self.overlay = Some(Overlay::information(format!("Aide : {mot}"), lignes));
       }
 
+    /// Ouvre la page `man` de la commande en cours de saisie (Ctrl+F1).
+    fn aide_man_courante(&mut self)
+      {
+        let commande = self.term.commande_courante();
+        let mot = commande.split_whitespace().next().unwrap_or("").to_string();
+        if mot.is_empty()
+          {
+            self.overlay_decalage = 0;
+            self.overlay = Some(Overlay::information(
+              "Manuel",
+              vec!["Saisissez une commande puis appuyez sur Ctrl+F1.".to_string()],
+            ));
+            return;
+          }
+        let lignes = match aide_man(&mot)
+          {
+            Some(lignes) => lignes,
+            None => vec![format!("Aucune page de manuel pour « {mot} ».")],
+          };
+        self.overlay_decalage = 0;
+        self.overlay = Some(Overlay::information(format!("Manuel : {mot}"), lignes));
+      }
+
     fn aide_bashop(&mut self)
       {
         let lignes = vec![
@@ -975,10 +935,10 @@ impl App
             crate::STATUT
           ),
           String::new(),
-          "F1        aide de la commande en cours (--help)".to_string(),
-          "Ctrl+F1   suggestion issue de l'historique".to_string(),
+          "F1        aide rapide de la commande en cours (--help)".to_string(),
+          "Ctrl+F1   page man de la commande en cours".to_string(),
           "F10       cette aide".to_string(),
-          "F2        bascule le mode capture (masquage)".to_string(),
+          "F2        bascule le mode capture / secret".to_string(),
           String::new(),
           format!("thème   : {}", self.theme.nom),
           format!("capture : {}", if self.config.capture { "on" } else { "off" }),
@@ -986,7 +946,7 @@ impl App
         ];
         self.overlay_decalage = 0;
         let mut surcouche = Overlay::information("Aide de Bashop", lignes);
-        surcouche.aide = "F2 capture · F10 rafraîchit · Échap ferme".to_string();
+        surcouche.aide = "F2 secret · F10 rafraîchit · Échap ferme".to_string();
         self.overlay = Some(surcouche);
       }
 
@@ -1010,8 +970,8 @@ impl App
           term: &self.term,
           config: &self.config,
           root: self.root_actif(),
+          fond: (self.theme.fond.r, self.theme.fond.g, self.theme.fond.b),
           identite: self.identite_courante(),
-          charge: self.charge.clone(),
           options: self.options_courantes(),
           suggestion,
           ghost: ghost.unwrap_or_default().chars().collect(),
@@ -1033,8 +993,8 @@ struct Vue<'a>
     term: &'a Terminal,
     config: &'a Config,
     root: bool,
+    fond: (u8, u8, u8),
     identite: String,
-    charge: String,
     options: Vec<String>,
     suggestion: Option<String>,
     ghost: Vec<char>,
@@ -1059,10 +1019,10 @@ impl Vue<'_>
             return;
           }
 
-        let stat_texte = stat::contenu(largeur, &self.identite, &self.charge);
+        let stat_texte = stat::contenu(largeur, &self.identite);
         let stat_style = Style::default()
           .fg(couleur_tuple(stat::TEXTE))
-          .bg(couleur_tuple(stat::FOND))
+          .bg(couleur_tuple(self.fond))
           .add_modifier(Modifier::BOLD);
         cadre.render_widget(
           Paragraph::new(Line::from(Span::styled(stat_texte, stat_style))),
@@ -1080,9 +1040,10 @@ impl Vue<'_>
           notification: self.notification.clone(),
           horodatage: self.horodatage.clone(),
           alerte: self.alerte.clone(),
+          derniere_erreur: self.term.derniere_erreur.clone(),
         };
         cadre.render_widget(
-          Paragraph::new(ligne_contexte(&contexte, largeur)),
+          Paragraph::new(ligne_contexte(&contexte, largeur, self.fond)),
           Rect { x: 0, y: hauteur - 1, width: largeur, height: 1 },
         );
 
@@ -1190,7 +1151,7 @@ fn couleur_tuple(rgb: (u8, u8, u8)) -> Color
   }
 
 /// Compose la ligne de contexte sur toute la largeur (gauche / centre / droite).
-fn ligne_contexte(contexte: &context::Contexte, largeur: u16) -> Line<'static>
+fn ligne_contexte(contexte: &context::Contexte, largeur: u16, fond: (u8, u8, u8)) -> Line<'static>
   {
     let largeur = largeur as usize;
     if largeur == 0
@@ -1199,11 +1160,11 @@ fn ligne_contexte(contexte: &context::Contexte, largeur: u16) -> Line<'static>
       }
     let base = Style::default()
       .fg(couleur_tuple(context::TEXTE))
-      .bg(couleur_tuple(context::FOND))
+      .bg(couleur_tuple(fond))
       .add_modifier(Modifier::BOLD);
     let style_centre = Style::default()
       .fg(couleur_tuple(context::couleur_centre(contexte)))
-      .bg(couleur_tuple(context::FOND))
+      .bg(couleur_tuple(fond))
       .add_modifier(Modifier::BOLD);
     let mut cellules: Vec<(char, Style)> = vec![(' ', base); largeur];
 
@@ -1215,9 +1176,19 @@ fn ligne_contexte(contexte: &context::Contexte, largeur: u16) -> Line<'static>
         cellules[depart_droite + i] = (*ch, base);
       }
 
+    let gauche: Vec<char> = context::gauche(contexte).chars().collect();
+    let gauche = &gauche[..gauche.len().min(depart_droite)];
+    for (i, ch) in gauche.iter().enumerate()
+      {
+        cellules[i] = (*ch, base);
+      }
+
+    let zone_debut = gauche.len();
+    let zone_fin = depart_droite.max(zone_debut);
+    let zone = zone_fin - zone_debut;
     let centre: Vec<char> = context::centre(contexte).chars().collect();
-    let centre = &centre[..centre.len().min(depart_droite.max(1))];
-    let depart_centre = largeur.saturating_sub(centre.len()) / 2;
+    let centre = &centre[..centre.len().min(zone)];
+    let depart_centre = zone_debut + (zone - centre.len()) / 2;
     for (i, ch) in centre.iter().enumerate()
       {
         let position = depart_centre + i;
@@ -1225,13 +1196,6 @@ fn ligne_contexte(contexte: &context::Contexte, largeur: u16) -> Line<'static>
           {
             cellules[position] = (*ch, style_centre);
           }
-      }
-
-    let gauche: Vec<char> = context::gauche(contexte).chars().collect();
-    let gauche = &gauche[..gauche.len().min(depart_centre)];
-    for (i, ch) in gauche.iter().enumerate()
-      {
-        cellules[i] = (*ch, base);
       }
 
     let mut spans: Vec<Span> = Vec::new();
@@ -1534,6 +1498,15 @@ fn sortie_avec_delai(programme: &str, argument: &str, delai: Duration) -> Option
   }
 
 /// Variante de [`sortie_avec_delai`] avec variables d'environnement à poser.
+/// Reconstruit le texte d'une commande simulée à partir de ses octets
+/// (`\x01\x0b` de mise à zéro de ligne en tête, `\r` final).
+fn texte_simulation(octets: &[u8]) -> String
+  {
+    let sans_prefixe = octets.strip_prefix(&[0x01, 0x0b]).unwrap_or(octets);
+    let sans_cr = sans_prefixe.strip_suffix(b"\r").unwrap_or(sans_prefixe);
+    String::from_utf8_lossy(sans_cr).to_string()
+  }
+
 fn sortie_avec_delai_env(
     programme: &str,
     argument: &str,
@@ -1797,8 +1770,8 @@ mod tests
           term: &term,
           config: &config,
           root: false,
+          fond: crate::frame::FOND_CADRE,
           identite: "test@hote".to_string(),
-          charge: "0.42".to_string(),
           options: vec!["--all".to_string()],
           suggestion: None,
           ghost: Vec::new(),
@@ -1815,7 +1788,7 @@ mod tests
         let texte = texte_buffer(terminal.backend().buffer());
         assert!(texte.contains("bonjour"), "sortie absente : {texte}");
         assert!(texte.contains('@'), "identité absente : {texte}");
-        assert!(texte.contains("Aide contextuelle"), "contexte absent : {texte}");
+        assert!(texte.contains("Aide rapide"), "contexte absent : {texte}");
         assert!(texte.contains("CPU 5%"), "compteurs système absents : {texte}");
       }
 
@@ -1828,8 +1801,8 @@ mod tests
           term: &term,
           config: &config,
           root: false,
+          fond: crate::frame::FOND_CADRE,
           identite: "test@hote".to_string(),
-          charge: String::new(),
           options: Vec::new(),
           suggestion: None,
           ghost: Vec::new(),

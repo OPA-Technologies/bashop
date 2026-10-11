@@ -6,8 +6,11 @@
 
 use std::path::PathBuf;
 
-use crate::bootstrap::{MARQUE_DEBUT, MARQUE_FIN, bloc_bash, bloc_zsh};
+use crate::bootstrap::{MARQUE_DEBUT, MARQUE_FIN, bloc_bash, bloc_systeme, bloc_zsh};
 use crate::shells::Shell;
+
+/// Chemin du bloc système sous Linux (sourcé par les shells de connexion).
+pub const CHEMIN_SYSTEME: &str = "/etc/profile.d/bashop.sh";
 
 /// Chemin du fichier rc principal d'un shell (best-effort).
 pub fn rc_principal(shell: Shell) -> Option<PathBuf>
@@ -133,7 +136,59 @@ pub fn desinstaller() -> Vec<PathBuf>
             touches.push(chemin);
           }
       }
+    let systeme = PathBuf::from(CHEMIN_SYSTEME);
+    if let Ok(contenu) = std::fs::read_to_string(&systeme)
+      {
+        let nouveau = retirer_bloc(&contenu);
+        if nouveau != contenu && std::fs::write(&systeme, nouveau).is_ok()
+          {
+            touches.push(systeme);
+          }
+      }
     touches
+  }
+
+/// Contenu après injection idempotente du bloc système.
+pub fn injecter_bloc_systeme(contenu: &str) -> String
+  {
+    let mut sortie = retirer_bloc(contenu).trim_end().to_string();
+    sortie.push_str("\n\n");
+    sortie.push_str(&bloc_systeme());
+    sortie
+  }
+
+/// Installe le bloc système dans le fichier `chemin` (créé si absent).
+pub fn installer_systeme_dans(chemin: &std::path::Path) -> std::io::Result<()>
+  {
+    let contenu = std::fs::read_to_string(chemin).unwrap_or_default();
+    let nouveau = injecter_bloc_systeme(&contenu);
+    if nouveau != contenu
+      {
+        std::fs::write(chemin, nouveau)?;
+      }
+    Ok(())
+  }
+
+/// Installe le bloc système sous Linux (`/etc/profile.d/bashop.sh`).
+///
+/// Best-effort et **Linux uniquement** : hors Linux, renvoie une erreur
+/// `Unsupported`. L'écriture requiert les droits root.
+#[cfg(target_os = "linux")]
+pub fn installer_systeme() -> std::io::Result<PathBuf>
+  {
+    let chemin = PathBuf::from(CHEMIN_SYSTEME);
+    installer_systeme_dans(&chemin)?;
+    Ok(chemin)
+  }
+
+/// Hors Linux, l'installation système n'est pas prise en charge.
+#[cfg(not(target_os = "linux"))]
+pub fn installer_systeme() -> std::io::Result<PathBuf>
+  {
+    Err(std::io::Error::new(
+      std::io::ErrorKind::Unsupported,
+      "installation système non prise en charge hors Linux",
+    ))
   }
 
 #[cfg(test)]
@@ -165,5 +220,36 @@ mod tests
     fn les_shells_sans_bloc_ne_sont_pas_modifies()
       {
         assert_eq!(injecter_bloc("contenu", Shell::Cmd), "contenu");
+      }
+
+    #[test]
+    fn le_bloc_systeme_s_injecte_idempotent_et_se_retire()
+      {
+        let initial = "# fichier profile.d quelconque\n";
+        let une = injecter_bloc_systeme(initial);
+        assert!(une.contains(MARQUE_DEBUT));
+        assert!(une.contains("bashop _nested"));
+        assert!(une.contains("# fichier profile.d quelconque"));
+        let deux = injecter_bloc_systeme(&une);
+        assert_eq!(deux, une, "l'injection système doit être idempotente");
+        let restaure = retirer_bloc(&deux);
+        assert_eq!(restaure.trim_end(), initial.trim_end());
+      }
+
+    #[test]
+    fn installer_systeme_dans_un_fichier_temporaire()
+      {
+        let dossier = std::env::temp_dir().join(format!("bashop-sys-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let chemin = dossier.join("bashop.sh");
+        installer_systeme_dans(&chemin).unwrap();
+        let contenu = std::fs::read_to_string(&chemin).unwrap();
+        assert!(contenu.contains(MARQUE_DEBUT));
+        assert!(contenu.contains("bashop prompt --shell bash"));
+        installer_systeme_dans(&chemin).unwrap();
+        let relu = std::fs::read_to_string(&chemin).unwrap();
+        assert_eq!(relu.matches(MARQUE_DEBUT).count(), 1, "pas de double bloc système");
+        let _ = std::fs::remove_file(&chemin);
+        let _ = std::fs::remove_dir(dossier);
       }
   }

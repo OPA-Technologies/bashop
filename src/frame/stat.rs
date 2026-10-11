@@ -1,7 +1,7 @@
 //! `term_stat` — ligne d'état générale (ligne 1).
 //!
-//! Gauche : `user@host [IP]` · centre : OS+flavor · droite : pays, date/heure,
-//! UTC et charge. Le contenu est réparti sur la largeur du terminal.
+//! Gauche : `user@host [IP]` · centre : OS+flavor · droite : pays, date/heure
+//! et UTC. Le contenu est réparti sur la largeur du terminal.
 
 use crate::providers;
 
@@ -59,10 +59,9 @@ pub fn repartir(gauche: &str, centre: &str, droite: &str, largeur: usize) -> Str
 
 /// Compose la ligne d'état complète.
 ///
-/// `identite` et `charge` sont fournies par l'appelant (identité dynamique sous
-/// reprise root, charge rafraîchie au tick) pour éviter des résolutions
-/// coûteuses à chaque rendu.
-pub fn contenu(largeur: u16, identite: &str, charge: &str) -> String
+/// `identite` est fournie par l'appelant (identité dynamique sous reprise root)
+/// pour éviter des résolutions coûteuses à chaque rendu.
+pub fn contenu(largeur: u16, identite: &str) -> String
   {
     let fqdn = providers::fqdn();
     let gauche = match providers::adresse_ip()
@@ -85,10 +84,6 @@ pub fn contenu(largeur: u16, identite: &str, charge: &str) -> String
     if utc != local
       {
         droite.push_str(&format!(" · UTC {}", utc));
-      }
-    if !charge.is_empty()
-      {
-        droite.push_str(&format!(" · {}", charge));
       }
     repartir(&gauche, &centre, &droite, largeur as usize)
   }

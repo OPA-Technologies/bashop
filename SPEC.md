@@ -33,6 +33,15 @@ shell tourne dans un pseudo-terminal enfant.
   **dégradé** si un vrai multiplexeur occupe déjà le terminal.
 - **Cadre toujours visible** : la ligne d'état et la ligne de contexte restent
   affichées même pendant `vi`, `less`, `man`.
+- **Environnement du shell enfant** : le shell lancé par le cadre émule un
+  démarrage **login + interactif** — il source `/etc/profile`, le premier de
+  `~/.bash_profile` / `~/.bash_login` / `~/.profile`, puis `/etc/bash.bashrc`
+  (`/etc/bashrc`) et `~/.bashrc` — afin que variables d'environnement, fonctions
+  **et alias** de l'utilisateur soient disponibles. `PS1`/`PROMPT_COMMAND` sont
+  ensuite reposés par Bashop (les réglages de prompt des rc sont neutralisés).
+  Réserve connue : si un profil de connexion source déjà `~/.bashrc` (défaut
+  Ubuntu), celui-ci peut être lu deux fois (alias idempotents ; un `PATH` mal
+  gardé peut être dupliqué).
 
 ### 2.1 Anti-nidification et reprise de session
 
@@ -54,13 +63,25 @@ Avant de lancer `bashop run`, la bootstrap vérifie trois choses :
 (cas d'un lancement manuel depuis un shell déjà encadré).
 
 Sous `sudo -i`/`su -`, le nouveau shell **reprend la session** (il n'ouvre pas
-un cadre imbriqué) : son `precmd` publie un OSC privé
-`ESC ] 1337 ; Bashop ; user=<u> ; priv=<root|wheel|classique> BEL`. Le cadre
+un cadre imbriqué). L'environnement est réinitialisé (donc `BASHOP_ACTIVE`
+disparaît), mais un ancêtre `bashop` subsiste : la commande interne
+`bashop _nested` le détecte. Le shell de connexion reçoit alors le prompt
+épinglé et les marqueurs `OSC 133` par `eval "$(bashop prompt --shell <s>)"`,
+ce qui évite d'ouvrir un second cadre tout en gardant le cadre parent
+réactualisé. Son `precmd` publie un OSC privé
+`ESC ] 1337 ; Bashop ; user=<u> ; priv=<root|wheel|classique> BEL` : le cadre
 adopte aussitôt l'identité et le thème correspondants (`term_stat` affiche le
-`user@host` réel, `term_context` le badge `ROOT!`) ; à la sortie de root, le
-cadre revient à l'identité précédente. Le privilège est recalculé à chaque
-démarrage de shell (une nouvelle session sous `sudo -i` source à nouveau la
-bootstrap), jamais par fork à chaque prompt.
+`user@host` réel, `term_context` le badge `ROOT!`, et les **deux lignes
+`term_*`** passent au fond rouge du thème `root` ; la zone centrale, dont le
+fond est fixé par l'`OSC 11` initial, reste inchangée). Le privilège est
+recalculé à chaque démarrage de shell, jamais par fork à chaque prompt.
+
+Deux points d'injection coopèrent : le bloc utilisateur (`~/.bashrc`,
+`~/.zshrc`) pour l'utilisateur lui-même, et — sous Linux — le **bloc système**
+`bashop install --system` (`/etc/profile.d/bashop.sh`) pour le shell de
+connexion **root** de `sudo -i` (qui ne lit pas le rc de l'utilisateur). Le
+bloc système est **inerte** hors `sudo -i` : il exige `bashop _nested` et un
+`bashop` présent dans le `PATH` de root (installation système recommandée).
 
 ## 3. Cadre (3 lignes)
 
@@ -81,8 +102,7 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 - Gauche : `user@host` avec `[FQDN IP]` (FQDN et IP réelle entre crochets).
 - Centre : `OS + flavor`.
 - Droite : drapeau pays + `[code pays]`, date et heure locales.
-- Extra compact : heure UTC au format **jour/mois heure:minute**, charge système
-  ultra-compacte.
+- Extra compact : heure UTC au format **jour/mois heure:minute**.
 - Le FQDN privilégie `hostname -f`, puis `hostname -d`, `dnsdomainname` et
   `/etc/resolv.conf` (domaine/localisé), sans jamais revenir à un hôte nu si un
   domaine est résoluble.
@@ -92,11 +112,13 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 
 Barre pleine largeur à trois zones :
 
-1. **Gauche — commandes/raccourcis** : `F1 - Aide contextuelle`, `F10 - Aide`,
-   `F2 - Capture`, `Ctrl+F1 - Suggestion`, puis les options découvertes et la
-   suggestion fantôme.
+1. **Gauche — commandes/raccourcis** : `F1 - Aide rapide`, `F2 - Secret`,
+   `F10 - Aide`, puis les options découvertes et la suggestion fantôme.
 2. **Centre — code retour** : `✓ ok` en **vert** si `0`, `✗ N` en **rouge**
-   sinon ; le préfixe `ROOT!` est ajouté sous bascule root.
+   sinon ; le préfixe `ROOT!` est ajouté sous bascule root. En cas d'échec
+   (code non nul), la **première ligne** du message d'erreur est recopiée après
+   le code (`✗ N — message`). Copie **purement observationnelle** : la sortie
+   réelle du shell, son code retour et ses redirections ne sont jamais altérés.
 3. **Droite — compteurs système** compacts (cpu / mémoire / io), rafraîchis
    toutes les **0,5 s**.
 
@@ -138,11 +160,11 @@ zone centrale.
 
 | Touche     | Action |
 |------------|--------|
-| `F1`       | Aide contextuelle de la commande en cours de saisie : `--help` d'abord (fork borné), sinon page `man` (bornée), sinon historique. |
-| `Ctrl+F1`  | Complète la ligne par une **suggestion fantôme** (ghost-text) à droite du curseur : options de `--help` d'abord, puis historique. |
+| `F1`       | Aide rapide de la commande en cours de saisie : `--help` d'abord (fork borné), sinon page `man` (bornée), sinon historique. |
+| `Ctrl+F1`  | Ouvre la page `man` de la commande en cours dans un pop-up (bornée). |
 | `PagePréc` / `PageSuiv` | Défilement (respectivement vers les entrées plus anciennes / le bas), avec la **molette** dispo en continu. |
-| `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** : `F2` y bascule le mode capture, `F10` rafraîchit. |
-| `F2`       | Bascule le **mode capture** on/off (session courante, persistable via `bashop capture`). |
+| `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** : `F2` y bascule le mode secret, `F10` rafraîchit. |
+| `F2`       | Bascule le **mode secret / capture** on/off (session courante, persistable via `bashop capture`). |
 
 - **Historique défilant** : les lignes évincées de la zone centrale sont
   conservées (10 000 lignes max) et redeviennent consultables par le défilement.
@@ -232,8 +254,8 @@ alerte et propose, l'utilisateur décide.
   `term_context` (`⚠ motif…`), avant même de valider ; le gating de l'Entrée
   reste la barrière bloquante.
 - ~~Correction « vouliez-vous dire ? » (distance d'édition)~~ : **non retenue**.
-  Seule la complétion par préfixe déjà offerte par le ghost-text `Ctrl+F1` est
-  proposée.
+  Seule la complétion par préfixe déjà offerte par le ghost-text continu de
+  saisie est proposée.
 
 ## 8. Mode capture
 
@@ -294,7 +316,7 @@ jamais éditer un fichier déployé à la main » s'applique aussi aux rc.
 src/
   lib.rs         module racine
   main.rs        point d'entrée, dispatch clap
-  cli.rs         sous-commandes run|install|uninstall|config|detect|template|capture
+  cli.rs         sous-commandes run|install|uninstall|config|detect|template|prompt|capture (+ _guard/_nested)
   config.rs      lecture ~/.opshellrc (KEY=VALUE) + tests
   config_ui.rs   interface `bashop config` (formulaire op-tui + --reload-rc)
   theme.rs       themes, suffixe, couleurs + tests

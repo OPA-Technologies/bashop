@@ -16,7 +16,7 @@ fn main() -> Result<()>
             let config = config::charger();
             bashop::run::executer(shell, &config)?;
           }
-        Command::Install { shell } =>
+        Command::Install { shell, system } =>
           {
             let cible = shell.as_deref().and_then(Shell::par_nom);
             if shell.is_some() && cible.is_none()
@@ -36,6 +36,21 @@ fn main() -> Result<()>
                       {
                         println!("bootstrap posé : {}", chemin.display());
                       }
+                  }
+              }
+            if system
+              {
+                match bashop::install::installer_systeme()
+                  {
+                    Ok(chemin) => println!("bootstrap système posé : {}", chemin.display()),
+                    Err(erreur) if erreur.kind() == std::io::ErrorKind::Unsupported => {
+                      println!("bashop install --system : non pris en charge sur cet OS (Linux uniquement)");
+                    }
+                    Err(erreur) => {
+                      println!(
+                        "bashop install --system : échec ({erreur}) — relancez avec des droits root"
+                      );
+                    }
                   }
               }
           }
@@ -77,6 +92,17 @@ fn main() -> Result<()>
           {
             afficher_template(&shell);
           }
+        Command::Prompt { shell } =>
+          {
+            let config = config::charger();
+            let theme = theme::resoudre(&config.theme, bashop::detect::privilege());
+            match shell.to_ascii_lowercase().as_str()
+              {
+                "bash" => print!("{}", bootstrap::script_prompt_bash(&theme, config.suffix_width)),
+                "zsh" => print!("{}", bootstrap::script_prompt_zsh(&theme, config.suffix_width)),
+                _ => eprintln!("Shell non pris en charge pour prompt : {shell} (attendu : bash, zsh)"),
+              }
+          }
         Command::Capture { state } =>
           {
             let actif = match state.to_ascii_lowercase().as_str()
@@ -95,6 +121,13 @@ fn main() -> Result<()>
         Command::Guard =>
           {
             if !bashop::detect::autoriser_cadre()
+              {
+                std::process::exit(1);
+              }
+          }
+        Command::Nested =>
+          {
+            if !bashop::detect::ancetre_bashop()
               {
                 std::process::exit(1);
               }

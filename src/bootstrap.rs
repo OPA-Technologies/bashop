@@ -115,30 +115,35 @@ fi\n";
 /// Publie identité et privilège par l'OSC privé `1337;Bashop`.
 const PUBLIER_PRIVILEGE: &str = "printf '\\033]1337;Bashop;user=%s;priv=%s\\007' \"$__bashop_user\" \"$__bashop_priv\"\n";
 
-/// En-tête bash : émule le démarrage d'un shell de connexion (profils) et
-/// garantit la lecture du `.bashrc` de l'utilisateur.
+/// En-tête bash : émule le démarrage d'un shell de connexion (profils) **puis**
+/// lit le rc interactif, de sorte que `.profile` **et** `.bashrc` de
+/// l'utilisateur soient disponibles (alias, fonctions, variables d'env).
+///
+/// Le bloc d'activation Bashop présent dans `.bashrc` est inoffensif ici :
+/// `BASHOP_ACTIVE=1` est transmis au shell enfant, donc le cadre n'est pas
+/// relancé. `PS1`/`PROMPT_COMMAND` sont posés **après** cet en-tête, ce qui
+/// neutralise d'éventuels réglages de prompt issus des rc.
 const ENTETE_BASH: &str = "\
-for __bashop_profil in /etc/profile \"${HOME}/.bash_profile\" \"${HOME}/.bash_login\" \"${HOME}/.profile\"\n\
+if [ -f /etc/profile ]; then . /etc/profile; fi\n\
+for __bashop_profil in \"${HOME}/.bash_profile\" \"${HOME}/.bash_login\" \"${HOME}/.profile\"\n\
 do\n\
   if [ -f \"$__bashop_profil\" ]\n\
   then\n\
     . \"$__bashop_profil\"\n\
-    __bashop_profil_lu=1\n\
     break\n\
   fi\n\
 done\n\
-if [ -z \"${__bashop_profil_lu:-}\" ] && [ -f \"${HOME}/.bashrc\" ]\n\
-then\n\
-  . \"${HOME}/.bashrc\"\n\
-fi\n\
-unset __bashop_profil __bashop_profil_lu\n";
+if [ -f /etc/bash.bashrc ]; then . /etc/bash.bashrc; fi\n\
+if [ -f /etc/bashrc ]; then . /etc/bashrc; fi\n\
+if [ -f \"${HOME}/.bashrc\" ]; then . \"${HOME}/.bashrc\"; fi\n\
+unset __bashop_profil\n";
 
-/// Contenu du fichier de démarrage de bash (`--rcfile`).
-pub fn rc_bash(theme: &Theme, largeur_suffixe: u16) -> String
+/// Corps de démarrage bash : `precmd` (heure, historique, statut, privilège),
+/// `PROMPT_COMMAND` et `PS1`. Ne lit **pas** les profils : c'est la partie
+/// commune au rc généré (`--rcfile`) et à la commande `bashop prompt`.
+pub fn script_prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
   {
-    let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
-    rc.push_str(ENTETE_BASH);
-    rc.push_str("shopt -s checkwinsize\n");
+    let mut rc = String::new();
     rc.push_str("__bashop_precmd()\n{\n");
     rc.push_str("  local s=$?\n");
     rc.push_str("  __BASHOP_HEURE=$(date +%H:%M:%S)\n");
@@ -152,13 +157,12 @@ pub fn rc_bash(theme: &Theme, largeur_suffixe: u16) -> String
     rc
   }
 
-/// Contenu du `.zshrc` de démarrage de zsh (via `ZDOTDIR`).
-pub fn zshrc_zsh(theme: &Theme, largeur_suffixe: u16) -> String
+/// Corps de démarrage zsh : `precmd` (heure, historique, statut, privilège) et
+/// `PROMPT`. Ne lit **pas** `~/.zshrc` : partie commune au `.zshrc` généré et à
+/// `bashop prompt`.
+pub fn script_prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
   {
-    let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
-    rc.push_str("setopt prompt_subst\n");
-    rc.push_str("setopt singlelinezle\n");
-    rc.push_str("if [ -f \"${HOME}/.zshrc\" ]; then source \"${HOME}/.zshrc\"; fi\n");
+    let mut rc = String::new();
     rc.push_str("__bashop_precmd()\n{\n");
     rc.push_str("  local s=$?\n");
     rc.push_str("  __BASHOP_HEURE=$(date +%H:%M:%S)\n");
@@ -170,6 +174,27 @@ pub fn zshrc_zsh(theme: &Theme, largeur_suffixe: u16) -> String
     rc.push_str("typeset -ga precmd_functions\n");
     rc.push_str("precmd_functions+=(__bashop_precmd)\n");
     rc.push_str(&format!("PROMPT='{}'\n", prompt_zsh(theme, largeur_suffixe)));
+    rc
+  }
+
+/// Contenu du fichier de démarrage de bash (`--rcfile`).
+pub fn rc_bash(theme: &Theme, largeur_suffixe: u16) -> String
+  {
+    let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
+    rc.push_str(ENTETE_BASH);
+    rc.push_str("shopt -s checkwinsize\n");
+    rc.push_str(&script_prompt_bash(theme, largeur_suffixe));
+    rc
+  }
+
+/// Contenu du `.zshrc` de démarrage de zsh (via `ZDOTDIR`).
+pub fn zshrc_zsh(theme: &Theme, largeur_suffixe: u16) -> String
+  {
+    let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
+    rc.push_str("setopt prompt_subst\n");
+    rc.push_str("setopt singlelinezle\n");
+    rc.push_str("if [ -f \"${HOME}/.zshrc\" ]; then source \"${HOME}/.zshrc\"; fi\n");
+    rc.push_str(&script_prompt_zsh(theme, largeur_suffixe));
     rc
   }
 
@@ -194,10 +219,15 @@ pub fn zlogin_zsh() -> String
 /// Bloc d'activation idempotent à injecter dans le `.bashrc` de l'utilisateur
 /// (`bashop install`). Il publie le privilège puis lance le cadre, sauf si
 /// Bashop est déjà actif (env ou ancêtre) ou sous un multiplexeur.
+///
+/// Sous un cadre **déjà actif** (cas `sudo -i` : l'environnement est
+/// réinitialisé mais un ancêtre `bashop` subsiste), le bloc ne relance pas le
+/// cadre : il repose seulement le prompt épinglé et les marqueurs `OSC 133` via
+/// `bashop prompt`, de sorte que le cadre parent se réactualise (thème root).
 pub fn bloc_bash() -> String
   {
     format!(
-      "{debut}\n{calcul}\n__bashop_osc()\n{{\n  printf '\\033]133;D;%s\\007' \"$?\"\n  {publier}}}\nif [ -n \"${{BASH_VERSION:-}}\" ]\nthen\n  case \"${{PROMPT_COMMAND:-}}\" in\n    *__bashop_osc*) : ;;\n    *) PROMPT_COMMAND=\"__bashop_osc${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\n  esac\nfi\nif [ -z \"${{BASHOP_ACTIVE:-}}\" ] && [ -z \"${{BASHOP_DISABLE:-}}\" ]\nthen\n  case \"$-\" in\n    *i*)\n      if command -v bashop >/dev/null 2>&1 && bashop _guard\n      then\n        exec bashop run --shell bash\n      fi\n      ;;\n  esac\nfi\n{fin}\n",
+      "{debut}\n{calcul}\n__bashop_osc()\n{{\n  printf '\\033]133;D;%s\\007' \"$?\"\n  {publier}}}\nif [ -n \"${{BASH_VERSION:-}}\" ]\nthen\n  case \"${{PROMPT_COMMAND:-}}\" in\n    *__bashop_osc*) : ;;\n    *) PROMPT_COMMAND=\"__bashop_osc${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\n  esac\nfi\nif [ -z \"${{BASHOP_ACTIVE:-}}\" ] && [ -z \"${{BASHOP_DISABLE:-}}\" ]\nthen\n  case \"$-\" in\n    *i*)\n      if command -v bashop >/dev/null 2>&1\n      then\n        if bashop _guard\n        then\n          exec bashop run --shell bash\n        elif bashop _nested\n        then\n          eval \"$(bashop prompt --shell bash)\"\n        fi\n      fi\n      ;;\n  esac\nfi\n{fin}\n",
       debut = MARQUE_DEBUT,
       calcul = CALCUL_PRIVILEGE,
       publier = PUBLIER_PRIVILEGE,
@@ -205,14 +235,31 @@ pub fn bloc_bash() -> String
     )
   }
 
-/// Bloc d'activation idempotent pour le `.zshrc` de l'utilisateur.
+/// Bloc d'activation idempotent pour le `.zshrc` de l'utilisateur. Voir
+/// [`bloc_bash`] pour la branche « cadre déjà actif ».
 pub fn bloc_zsh() -> String
   {
     format!(
-      "{debut}\n{calcul}\n__bashop_osc()\n{{\n  printf '\\033]133;D;%s\\007' \"$?\"\n  {publier}}}\ntypeset -ga precmd_functions\nprecmd_functions+=(__bashop_osc)\nif [ -z \"${{BASHOP_ACTIVE:-}}\" ] && [ -z \"${{BASHOP_DISABLE:-}}\" ]\nthen\n  if [[ -o interactive ]] && command -v bashop >/dev/null 2>&1 && bashop _guard\n  then\n    exec bashop run --shell zsh\n  fi\nfi\n{fin}\n",
+      "{debut}\n{calcul}\n__bashop_osc()\n{{\n  printf '\\033]133;D;%s\\007' \"$?\"\n  {publier}}}\ntypeset -ga precmd_functions\nprecmd_functions+=(__bashop_osc)\nif [ -z \"${{BASHOP_ACTIVE:-}}\" ] && [ -z \"${{BASHOP_DISABLE:-}}\" ]\nthen\n  if [[ -o interactive ]] && command -v bashop >/dev/null 2>&1\n  then\n    if bashop _guard\n    then\n      exec bashop run --shell zsh\n    elif bashop _nested\n    then\n      eval \"$(bashop prompt --shell zsh)\"\n    fi\n  fi\nfi\n{fin}\n",
       debut = MARQUE_DEBUT,
       calcul = CALCUL_PRIVILEGE,
       publier = PUBLIER_PRIVILEGE,
+      fin = MARQUE_FIN,
+    )
+  }
+
+/// Bloc **système** (`bashop install --system`) à déposer sous
+/// `/etc/profile.d/bashop.sh` (Linux). Il rend le prompt Bashop disponible au
+/// shell de connexion **root** déclenché par `sudo -i` : l'environnement est
+/// réinitialisé (donc `BASHOP_ACTIVE` disparaît) mais un ancêtre `bashop`
+/// subsiste, ce que détecte `bashop _nested`. Le bloc est neutre (POSIX) et
+/// sans effet hors de ce cas : un shell root ordinaire (aucun ancêtre Bashop)
+/// n'est pas modifié.
+pub fn bloc_systeme() -> String
+  {
+    format!(
+      "{debut}\nif [ -z \"${{BASHOP_ACTIVE:-}}\" ] && [ -z \"${{BASHOP_DISABLE:-}}\" ] && command -v bashop >/dev/null 2>&1 && bashop _nested\nthen\n  case \"$-\" in\n    *i*)\n      if [ -n \"${{BASH_VERSION:-}}\" ]\n      then\n        eval \"$(bashop prompt --shell bash)\"\n      elif [ -n \"${{ZSH_VERSION:-}}\" ]\n      then\n        eval \"$(bashop prompt --shell zsh)\"\n      fi\n      ;;\n  esac\nfi\n{fin}\n",
+      debut = MARQUE_DEBUT,
       fin = MARQUE_FIN,
     )
   }
@@ -297,11 +344,13 @@ mod tests
       }
 
     #[test]
-    fn le_rc_bash_source_les_profils_de_connexion()
+    fn le_rc_bash_source_les_profils_de_connexion_et_le_bashrc()
       {
         let rc = rc_bash(&CLASSIQUE, 6);
         assert!(rc.contains("/etc/profile"));
         assert!(rc.contains(".bash_profile"));
+        assert!(rc.contains("${HOME}/.bashrc"), "le .bashrc doit toujours être lu : {rc}");
+        assert!(rc.contains("/etc/bash.bashrc"));
       }
 
     #[test]
@@ -315,5 +364,49 @@ mod tests
         let zsh = bloc_zsh();
         assert!(zsh.starts_with(MARQUE_DEBUT));
         assert!(zsh.contains("exec bashop run --shell zsh"));
+      }
+
+    #[test]
+    fn les_blocs_reposent_le_prompt_dans_un_cadre_deja_actif()
+      {
+        let bash = bloc_bash();
+        assert!(bash.contains("bashop _nested"), "branche imbriquée bash absente : {bash}");
+        assert!(bash.contains("bashop prompt --shell bash"), "prompt imbriqué bash absent : {bash}");
+        let zsh = bloc_zsh();
+        assert!(zsh.contains("bashop _nested"), "branche imbriquée zsh absente : {zsh}");
+        assert!(zsh.contains("bashop prompt --shell zsh"), "prompt imbriqué zsh absent : {zsh}");
+      }
+
+    #[test]
+    fn le_bloc_systeme_repose_le_prompt_pour_bash_et_zsh()
+      {
+        let bloc = bloc_systeme();
+        assert!(bloc.starts_with(MARQUE_DEBUT));
+        assert!(bloc.trim_end().ends_with(MARQUE_FIN));
+        assert!(bloc.contains("bashop _nested"));
+        assert!(bloc.contains("bashop prompt --shell bash"));
+        assert!(bloc.contains("bashop prompt --shell zsh"));
+        assert!(bloc.contains("BASHOP_DISABLE"));
+        assert!(bloc.contains("*i*"), "le bloc doit rester réservé aux shells interactifs");
+      }
+
+    #[test]
+    fn le_script_prompt_bash_contient_precmd_et_ps1()
+      {
+        let script = script_prompt_bash(&CLASSIQUE, 6);
+        assert!(script.contains("__bashop_precmd()"));
+        assert!(script.contains("PROMPT_COMMAND"));
+        assert!(script.contains("PS1="));
+        assert!(script.contains("${__BASHOP_HIST}"));
+        assert!(script.contains("133;A"));
+      }
+
+    #[test]
+    fn le_script_prompt_zsh_contient_precmd_et_prompt()
+      {
+        let script = script_prompt_zsh(&CLASSIQUE, 6);
+        assert!(script.contains("__bashop_precmd()"));
+        assert!(script.contains("precmd_functions"));
+        assert!(script.contains("PROMPT="));
       }
   }

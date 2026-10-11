@@ -331,17 +331,6 @@ pub fn drapeau(code: &str) -> String
     drapeau
   }
 
-/// Charge système sur une minute (compacte), lue dans `/proc/loadavg`.
-pub fn charge() -> String
-  {
-    if let Ok(contenu) = std::fs::read_to_string("/proc/loadavg")
-      && let Some(premier) = contenu.split_whitespace().next()
-      {
-        return premier.to_string();
-      }
-    String::new()
-  }
-
 /// Mesure compacte cpu/mémoire/io, rafraîchie périodiquement.
 ///
 /// Les débits sont calculés par différence entre deux échantillons successifs.

@@ -66,6 +66,12 @@ pub struct Terminal
     pub col_commande: u16,
     /// Dernier code retour annoncé (OSC 133;D), si connu.
     pub dernier_statut: Option<i32>,
+    /// Texte de la commande en cours d'exécution (écho à ignorer).
+    pub commande_lancee: String,
+    /// Première ligne de sortie non vide de la commande en cours.
+    premiere_sortie: Option<String>,
+    /// Copie de la première ligne d'erreur (code retour non nul).
+    pub derniere_erreur: Option<String>,
     /// Titre de fenêtre demandé par l'enfant (OSC 0/2), si connu.
     pub titre: String,
     /// Identité publiée par le shell (OSC privé `1337;Bashop;user=…`).
@@ -102,6 +108,9 @@ impl Terminal
           etat: EtatShell::Inconnu,
           col_commande: 0,
           dernier_statut: None,
+          commande_lancee: String::new(),
+          premiere_sortie: None,
+          derniere_erreur: None,
           titre: String::new(),
           utilisateur: None,
           privilege: None,
@@ -195,7 +204,9 @@ impl Terminal
     /// Retour chariot puis saut de ligne (comportement d'un `\n` en sortie).
     pub(crate) fn nouvelle_ligne(&mut self)
       {
-        if self.grid.curseur_lig + 1 >= self.grid.hauteur
+        let lig = self.grid.curseur_lig;
+        self.capturer_sortie(lig);
+        if lig + 1 >= self.grid.hauteur
           {
             self.grid.defiler_haut();
           }
@@ -203,6 +214,35 @@ impl Terminal
           {
             self.grid.curseur_lig += 1;
           }
+      }
+
+    /// Retient la **première** ligne de sortie non vide d'une commande en cours,
+    /// en ignorant l'écho de la commande elle-même. Pure observation : aucune
+    /// donnée du shell n'est altérée (redirections, `tee`, code retour intacts).
+    fn capturer_sortie(&mut self, lig: u16)
+      {
+        if self.premiere_sortie.is_some() || self.etat != EtatShell::Commande
+          {
+            return;
+          }
+        let brut = self.grid.texte_ligne(lig);
+        let complet = brut.trim();
+        let debut = (self.col_commande as usize).min(brut.chars().count());
+        let queue: String = brut.chars().skip(debut).collect();
+        let queue = queue.trim();
+        if complet.is_empty() || complet == self.commande_lancee.trim()
+          || queue == self.commande_lancee.trim()
+          {
+            return;
+          }
+        let borne: String = complet.chars().take(120).collect();
+        self.premiere_sortie = Some(borne);
+      }
+
+    /// Efface la copie d'erreur affichée par le cadre.
+    pub fn effacer_erreur(&mut self)
+      {
+        self.derniere_erreur = None;
       }
 
     /// Index (ESC D) : ligne suivante, sans retour chariot.

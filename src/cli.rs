@@ -32,6 +32,9 @@ pub enum Command
         /// Shell ciblé (défaut : tous les shells détectés).
         #[arg(long)]
         shell: Option<String>,
+        /// Installe aussi le bloc système (`/etc/profile.d`, Linux) pour `sudo -i`.
+        #[arg(long)]
+        system: bool,
       },
     /// Retire le bootstrap des rc des shells.
     Uninstall,
@@ -50,6 +53,14 @@ pub enum Command
         /// Shell ciblé (bash, zsh, sh, powershell, cmd).
         shell: String,
       },
+    /// Émet le code shell qui repose le prompt épinglé et les marqueurs OSC
+    /// (utilisé en shell imbriqué, ex. `sudo -i`) ; à `eval`er.
+    Prompt
+      {
+        /// Shell ciblé (bash, zsh).
+        #[arg(long, default_value = "bash")]
+        shell: String,
+      },
     /// Active, désactive ou bascule le mode capture (persisté dans `~/.opshellrc`).
     Capture
       {
@@ -60,4 +71,7 @@ pub enum Command
     /// (interne) Garde de nidification : sort 0 si le cadre peut être lancé.
     #[command(name = "_guard", hide = true)]
     Guard,
+    /// (interne) Sort 0 si un ancêtre Bashop est déjà présent (cadre actif).
+    #[command(name = "_nested", hide = true)]
+    Nested,
   }

@@ -111,12 +111,23 @@ impl Terminal
             }
             Some(b'C') => {
               self.etat = EtatShell::Commande;
+              self.premiere_sortie = None;
+              self.derniere_erreur = None;
             }
             Some(b'D') => {
-              self.dernier_statut = params
+              let code = params
                 .get(2)
                 .and_then(|p| std::str::from_utf8(p).ok())
                 .and_then(|s| s.trim().parse::<i32>().ok());
+              self.dernier_statut = code;
+              if code.is_some_and(|c| c != 0)
+                {
+                  self.derniere_erreur = self.premiere_sortie.take();
+                }
+              else
+                {
+                  self.premiere_sortie = None;
+                }
             }
             _ => {}
           }
@@ -311,5 +322,79 @@ mod tests
         assert!(!term.paste_bracketed);
         alimenter(&mut term, b"\x1b[?2004h");
         assert!(term.paste_bracketed);
+      }
+
+    #[test]
+    fn la_premiere_ligne_d_erreur_est_copiee_avec_le_code()
+      {
+        let mut term = Terminal::nouveau(80, 5);
+        term.commande_lancee = "ls /nope".to_string();
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        alimenter(&mut term, b"ls /nope\r\nls: cannot access '/nope': No such file or directory\r\n");
+        assert_eq!(term.derniere_erreur, None);
+        alimenter(&mut term, b"\x1b]133;D;2\x1b\\");
+        assert_eq!(term.dernier_statut, Some(2));
+        assert_eq!(
+          term.derniere_erreur.as_deref(),
+          Some("ls: cannot access '/nope': No such file or directory"),
+        );
+      }
+
+    #[test]
+    fn une_commande_reussie_ne_conserve_pas_de_message()
+      {
+        let mut term = Terminal::nouveau(80, 5);
+        term.commande_lancee = "echo bonjour".to_string();
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        alimenter(&mut term, b"echo bonjour\r\nbonjour\r\n");
+        alimenter(&mut term, b"\x1b]133;D;0\x1b\\");
+        assert_eq!(term.dernier_statut, Some(0));
+        assert_eq!(term.derniere_erreur, None);
+      }
+
+    #[test]
+    fn l_echo_de_la_commande_n_est_pas_pris_pour_une_erreur()
+      {
+        let mut term = Terminal::nouveau(80, 5);
+        term.commande_lancee = "true".to_string();
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        alimenter(&mut term, b"true\r\n");
+        alimenter(&mut term, b"\x1b]133;D;1\x1b\\");
+        assert_eq!(term.derniere_erreur, None);
+      }
+
+    #[test]
+    fn une_nouvelle_commande_efface_l_erreur_precedente()
+      {
+        let mut term = Terminal::nouveau(40, 5);
+        term.derniere_erreur = Some("ancienne erreur".to_string());
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        assert_eq!(term.derniere_erreur, None);
+      }
+
+    #[test]
+    fn l_echo_prefixe_par_le_prompt_est_ignore()
+      {
+        let mut term = Terminal::nouveau(80, 5);
+        alimenter(&mut term, b"user$ ");
+        alimenter(&mut term, b"\x1b]133;B\x1b\\");
+        term.commande_lancee = "ls /nope".to_string();
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        alimenter(&mut term, b"ls /nope\r\nls: no such file\r\n");
+        alimenter(&mut term, b"\x1b]133;D;2\x1b\\");
+        assert_eq!(term.derniere_erreur.as_deref(), Some("ls: no such file"));
+      }
+
+    #[test]
+    fn l_erreur_est_capturee_meme_quand_l_ecran_defile()
+      {
+        let mut term = Terminal::nouveau(80, 3);
+        alimenter(&mut term, b"motd-1\r\nmotd-2\r\nmotd-3\r\n");
+        term.commande_lancee = "ls /nope".to_string();
+        alimenter(&mut term, b"\x1b]133;C\x1b\\");
+        alimenter(&mut term, b"ls /nope\r\n");
+        alimenter(&mut term, b"BOOM: no such file\r\n");
+        alimenter(&mut term, b"\x1b]133;D;2\x1b\\");
+        assert_eq!(term.derniere_erreur.as_deref(), Some("BOOM: no such file"));
       }
   }

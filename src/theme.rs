@@ -46,6 +46,8 @@ pub struct Theme
     pub accent: Rgb,
     /// Suffixe de fin de prompt.
     pub suffixe: Suffixe,
+    /// Fond des deux lignes du cadre (`term_stat`, `term_context`).
+    pub fond: Rgb,
   }
 
 /// Thème classique (utilisateur normal) — base des deux autres.
@@ -54,6 +56,7 @@ pub const CLASSIQUE: Theme =
     nom: "classique",
     accent: Rgb::new(0xA6, 0xE3, 0xA1),
     suffixe: Suffixe { glyphe: ">>", couleur: Rgb::new(0x4E, 0x9A, 0x06) },
+    fond: Rgb::new(0x2E, 0x34, 0x40),
   };
 
 /// Thème wheel (membre du groupe wheel / administrateurs).
@@ -62,14 +65,16 @@ pub const WHEEL: Theme =
     nom: "wheel",
     accent: Rgb::new(0xCB, 0xA6, 0xF7),
     suffixe: Suffixe { glyphe: ">>>>", couleur: Rgb::new(0xCB, 0xA6, 0xF7) },
+    fond: Rgb::new(0x2E, 0x34, 0x40),
   };
 
-/// Thème root (superutilisateur).
+/// Thème root (superutilisateur) : fond rouge sombre pour signaler le danger.
 pub const ROOT: Theme =
   Theme {
     nom: "root",
     accent: Rgb::new(0xF3, 0x8B, 0xA8),
     suffixe: Suffixe { glyphe: "###>", couleur: Rgb::new(0xF3, 0x8B, 0xA8) },
+    fond: Rgb::new(0x5A, 0x23, 0x23),
   };
 
 /// Résout un thème par son nom (repli sur `classique`).
@@ -142,5 +147,19 @@ mod tests
       {
         use crate::detect::Privilege;
         assert_eq!(resoudre("classique", Privilege::Root), CLASSIQUE);
+      }
+
+    #[test]
+    fn le_theme_root_a_un_fond_rouge_distinct()
+      {
+        fn tire_vers_le_rouge(couleur: Rgb) -> bool
+          {
+            couleur.r > couleur.g && couleur.r > couleur.b
+          }
+        const FOND_NEUTRE: Rgb = Rgb::new(0x2E, 0x34, 0x40);
+        assert_eq!(CLASSIQUE.fond, FOND_NEUTRE);
+        assert_eq!(WHEEL.fond, FOND_NEUTRE);
+        assert_ne!(ROOT.fond, FOND_NEUTRE);
+        assert!(tire_vers_le_rouge(ROOT.fond), "le fond root doit tirer vers le rouge");
       }
   }
