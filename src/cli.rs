@@ -35,8 +35,13 @@ pub enum Command
       },
     /// Retire le bootstrap des rc des shells.
     Uninstall,
-    /// Ouvre l'interface de configuration (op-tui).
-    Config,
+    /// Ouvre l'interface de configuration (op-tui) ou affiche la config active.
+    Config
+      {
+        /// Relit `~/.opshellrc` et affiche le résumé sans ouvrir l'interface.
+        #[arg(long)]
+        reload_rc: bool,
+      },
     /// Affiche les informations de détection (OS, shell, terminal, privilège).
     Detect,
     /// Émet le template de prompt pour un shell donné.

@@ -16,6 +16,7 @@ pub const STATUT: &str = "Beta-Release";
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
+pub mod config_ui;
 pub mod detect;
 pub mod frame;
 pub mod host;

@@ -93,6 +93,44 @@ pub fn fixer_capture(actif: bool) -> std::io::Result<()>
     fixer_capture_dans(PathBuf::from(home).join(".opshellrc"), actif)
   }
 
+/// Contenu canonique de `~/.opshellrc` pour une configuration : les clés
+/// reconnues dans un ordre stable, puis les clés inconnues triées.
+pub fn assembler(config: &Config) -> String
+  {
+    let mut lignes = Vec::new();
+    lignes.push(format!("THEME={}", config.theme.trim()));
+    lignes.push(format!(
+      "TRIGGERS={}",
+      config.triggers.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(", ")
+    ));
+    lignes.push(format!("SUFFIX_WIDTH={}", config.suffix_width.max(1)));
+    lignes.push(format!("CAPTURE={}", if config.capture { "on" } else { "off" }));
+    lignes.push(format!("NOTIFICATION={}", if config.notification { "on" } else { "off" }));
+    lignes.push(format!("NOTIFICATION_SEUIL={}", config.seuil_notification.max(1)));
+    lignes.push(format!("HORODATAGE={}", if config.horodatage { "on" } else { "off" }));
+    for (cle, valeur) in &config.inconnues
+      {
+        lignes.push(format!("{cle}={valeur}"));
+      }
+    lignes.join("\n") + "\n"
+  }
+
+/// Écrit `~/.opshellrc` depuis une configuration, sans perte des clés
+/// inconnues (voir [`assembler`]).
+pub fn ecrire(config: &Config) -> std::io::Result<PathBuf>
+  {
+    let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME absent"))?;
+    let chemin = PathBuf::from(home).join(".opshellrc");
+    ecrire_dans(&chemin, config)?;
+    Ok(chemin)
+  }
+
+/// Variante testable de [`ecrire`], sur un chemin explicite.
+pub fn ecrire_dans(chemin: &PathBuf, config: &Config) -> std::io::Result<()>
+  {
+    std::fs::write(chemin, assembler(config))
+  }
+
 /// Variante testable de [`fixer_capture`], sur un chemin explicite.
 pub fn fixer_capture_dans(chemin: PathBuf, actif: bool) -> std::io::Result<()>
   {
@@ -276,5 +314,43 @@ mod tests
         assert!(contenu.contains("CAPTURE=on"));
         let _ = std::fs::remove_file(&chemin);
         let _ = std::fs::remove_dir(dossier);
+      }
+
+    #[test]
+    fn le_contenu_canonique_est_ordonne_et_sans_double()
+      {
+        let c = analyser("# rien\nHORODATAGE=on\nTHEME=wheel\nSUFFIX_WIDTH=8\nCAPTURE=off\nNOTIFICATION=off\nNOTIFICATION_SEUIL=9\nTRIGGERS=sudo, su\n");
+        let contenu = assembler(&c);
+        let lignes: Vec<&str> = contenu.lines().collect();
+        assert_eq!(lignes[0], "THEME=wheel");
+        assert!(lignes[1].starts_with("TRIGGERS="));
+        assert_eq!(lignes[2], "SUFFIX_WIDTH=8");
+        assert_eq!(lignes[3], "CAPTURE=off");
+        assert_eq!(lignes[4], "NOTIFICATION=off");
+        assert_eq!(lignes[5], "NOTIFICATION_SEUIL=9");
+        assert_eq!(lignes[6], "HORODATAGE=on");
+        assert_eq!(lignes.len(), 7, "aucune clé en double, pas de ligne vide");
+      }
+
+    #[test]
+    fn un_aller_retour_ecriture_lecture_ne_perd_rien()
+      {
+        let dossier = std::env::temp_dir().join(format!("bashop-cfg3-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).unwrap();
+        let chemin = dossier.join(".opshellrc");
+        let c = analyser("# c\nTHEME=classique\nTRIGGERS=sudo, doas\nCAPTURE=off\nNOTIFICATION=on\nNOTIFICATION_SEUIL=3\nHORODATAGE=yes\nCOULEUR_PERSO=#112233\n");
+        ecrire_dans(&chemin, &c).unwrap();
+        let relu = analyser(&std::fs::read_to_string(&chemin).unwrap());
+        assert_eq!(c, relu, "le cycle écriture → relecture est stable");
+        let _ = std::fs::remove_file(&chemin);
+        let _ = std::fs::remove_dir(dossier);
+      }
+
+    #[test]
+    fn les_espaces_etroits_du_theme_sont_nettoyes()
+      {
+        let c = analyser("THEME=  wheel  \nTRIGGERS=  sudo  ,   su ");
+        assert_eq!(c.theme, "wheel");
+        assert_eq!(c.triggers, vec!["sudo", "su"]);
       }
   }

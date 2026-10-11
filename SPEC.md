@@ -273,8 +273,12 @@ Clés reconnues (extrait) :
 | `NOTIFICATION_SEUIL` | Durée minimale en secondes (défaut `5`). |
 | `HORODATAGE` | Horodatage des commandes `on`/`off` (défaut `off`). |
 
-`bashop config` ouvre l'interface de configuration (via `op-tui`). La règle
-« ne jamais éditer un fichier déployé à la main » s'applique aussi aux rc.
+`bashop config` ouvre l'interface de configuration (formulaire op-tui sur
+ratatui : navigation `↑/↓`, édition `Entrée`, annulation `Échap` d'un champ,
+`F2` ou `Échap` en liste = **enregistrer et quitter**). `--reload-rc` relit
+`~/.opshellrc` et affiche le résumé de la configuration active **sans** ouvrir
+l'interface (pratique après édition manuelle ou en non-tty). La règle « ne
+jamais éditer un fichier déployé à la main » s'applique aussi aux rc.
 
 ## 11. Architecture du code
 
@@ -284,6 +288,7 @@ src/
   main.rs        point d'entrée, dispatch clap
   cli.rs         sous-commandes run|install|uninstall|config|detect|template|capture
   config.rs      lecture ~/.opshellrc (KEY=VALUE) + tests
+  config_ui.rs   interface `bashop config` (formulaire op-tui + --reload-rc)
   theme.rs       themes, suffixe, couleurs + tests
   lexer.rs       decoupage et detection de declencheur + tests
   detect.rs      OS, arch, shell, privilege, anti-nidification

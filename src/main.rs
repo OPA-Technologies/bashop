@@ -54,9 +54,20 @@ fn main() -> Result<()>
                   }
               }
           }
-        Command::Config =>
+        Command::Config { reload_rc } =>
           {
-            println!("bashop config (interface à finaliser en M4)");
+            let config = config::charger();
+            if reload_rc
+              {
+                println!("{}", bashop::config_ui::resume(&config));
+              }
+            else
+              {
+                let editee = bashop::config_ui::editer(config)?;
+                let chemin = config::ecrire(&editee)?;
+                println!("Configuration enregistrée : {}", chemin.display());
+                println!("{}", bashop::config_ui::resume(&editee));
+              }
           }
         Command::Detect =>
           {
