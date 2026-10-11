@@ -158,6 +158,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       options_help: Arc::new(Mutex::new(HashMap::new())),
       options_help_en_cours: Arc::new(Mutex::new(HashSet::new())),
       a_executer: None,
+      a_executer_simule: None,
       historique: charger_historique(),
       systeme: MesureSysteme::nouveau(),
       charge: providers::charge(),
@@ -216,6 +217,7 @@ struct App
     options_help: Arc<Mutex<HashMap<String, Vec<String>>>>,
     options_help_en_cours: Arc<Mutex<HashSet<String>>>,
     a_executer: Option<Vec<u8>>,
+    a_executer_simule: Option<Vec<u8>>,
     historique: Vec<String>,
     systeme: MesureSysteme,
     charge: String,
@@ -389,10 +391,22 @@ impl App
                       self.debuter_commande();
                     }
                 }
+                KeyCode::Char('d') if self.a_executer_simule.is_some() => {
+                  if let Some(octets) = self.a_executer_simule.take()
+                    {
+                      self.ecrivain.write_all(&octets)?;
+                      self.ecrivain.flush()?;
+                      self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
+                      self.term.etat = EtatShell::Commande;
+                      self.debuter_commande();
+                    }
+                }
                 _ => {
                   self.a_executer = None;
                 }
               }
+            self.a_executer = None;
+            self.a_executer_simule = None;
             self.overlay = None;
             return Ok(());
           }
@@ -421,10 +435,14 @@ impl App
           {
             self.overlay_decalage = 0;
             self.overlay = None;
+            self.a_executer = None;
+            self.a_executer_simule = None;
             return Ok(());
           }
         self.overlay_decalage = 0;
         self.overlay = None;
+        self.a_executer = None;
+        self.a_executer_simule = None;
         Ok(())
       }
 
@@ -485,20 +503,63 @@ impl App
         contenu.saturating_sub(self.hauteur.saturating_sub(6).max(2) as usize)
       }
 
+    /// Alerte affichée au centre quand la ligne en cours de saisie (ou
+    /// rappelée de l'historique) présente un risque, ou qu'une simulation est
+    /// disponible. `None` si rien à signaler.
+    fn alerte_courante(&self) -> Option<String>
+      {
+        if !self.etat_effectif()
+          {
+            return None;
+          }
+        let commande = self.term.commande_courante();
+        if commande.trim().is_empty()
+          {
+            return None;
+          }
+        let verdict = safety::evaluer(&commande);
+        let mut fragments: Vec<String> =
+          verdict.motifs.iter().take(2).map(|motif| format!("⚠ {motif}")).collect();
+        if let Some(simulation) = safety::simulation(&commande)
+          {
+            fragments.push(format!("💡 {simulation}"));
+          }
+        if fragments.is_empty()
+          {
+            return None;
+          }
+        Some(fragments.join("   "))
+      }
+
     fn valider(&mut self) -> Result<()>
       {
         let commande = self.term.commande_courante();
         let verdict = safety::evaluer(&commande);
-        if verdict.niveau == safety::Niveau::Danger
+        let simulation = safety::simulation(&commande);
+        let confirmer = verdict.niveau == safety::Niveau::Danger
+          || (verdict.niveau == safety::Niveau::Avertissement && simulation.is_some());
+        if confirmer
           {
             let mut lignes = vec![format!("Commande : {}", commande), String::new()];
             for motif in &verdict.motifs
               {
                 lignes.push(format!("• {motif}"));
               }
+            if let Some(simulation) = &simulation
+              {
+                lignes.push(String::new());
+                lignes.push(format!("💡 Simulation possible : {simulation}"));
+              }
             self.a_executer = Some(b"\r".to_vec());
+            self.a_executer_simule =
+              simulation.map(|s| format!("\x01\x0b{s}\r").into_bytes());
             self.overlay_decalage = 0;
-            self.overlay = Some(Overlay::confirmation("Confirmation requise", lignes));
+            let mut surcouche = Overlay::confirmation("Confirmation requise", lignes);
+            if self.a_executer_simule.is_some()
+              {
+                surcouche.aide = "[o] exécuter   [d] simulation   [n] annuler".to_string();
+              }
+            self.overlay = Some(surcouche);
             return Ok(());
           }
         self.executer_ligne()
@@ -960,6 +1021,7 @@ impl App
           overlay: self.overlay.as_ref(),
           notification,
           horodatage: self.instant_commande.clone(),
+          alerte: self.alerte_courante(),
         };
         vue.dessiner(cadre);
       }
@@ -982,6 +1044,7 @@ struct Vue<'a>
     overlay: Option<&'a Overlay>,
     notification: Option<String>,
     horodatage: Option<String>,
+    alerte: Option<String>,
   }
 
 impl Vue<'_>
@@ -1016,6 +1079,7 @@ impl Vue<'_>
           systeme: self.systeme.clone(),
           notification: self.notification.clone(),
           horodatage: self.horodatage.clone(),
+          alerte: self.alerte.clone(),
         };
         cadre.render_widget(
           Paragraph::new(ligne_contexte(&contexte, largeur)),
@@ -1744,6 +1808,7 @@ mod tests
           overlay: None,
           notification: None,
           horodatage: None,
+          alerte: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(100, 8)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
@@ -1774,6 +1839,7 @@ mod tests
           overlay: None,
           notification: None,
           horodatage: None,
+          alerte: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(10, 2)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();

@@ -221,11 +221,19 @@ alerte et propose, l'utilisateur décide.
   *bracketed paste* est respecté (DECSET `2004`) si le programme enfant l'a
   activé. Avertir avant exécution d'un collage suspect.
 - Détection de **secrets** dans la ligne.
-- Correction « **vouliez-vous dire ?** » pour les commandes proches d'une
-  commande connue.
-- Proposition systématique de **`--dry-run` / `-n`** quand c'est applicable.
-- Signalement de l'usage de l'**historique dangereux** (commande risquée
-  rappelée).
+- Proposition de **`--dry-run` / `-n`** quand c'est applicable : si la commande
+  jugée risquée appartient à un programme dont la simulation est stable
+  (`rsync`, `make`, `apt`/`apt-get`, `pip`/`pip3`, `npm`, `git clean`),
+  l'overlay de confirmation affiche la variante simulée et la touche `d`
+  l'exécute (`rsync --dry-run …`, `make -n …`, `apt-get -s …`, …) au lieu de la
+  commande brute.
+- Signalement de l'**historique dangereux** : toute ligne risquée présente au
+  prompt — saisie ou **rappelée** par `↑` — est signalée en continu au centre de
+  `term_context` (`⚠ motif…`), avant même de valider ; le gating de l'Entrée
+  reste la barrière bloquante.
+- ~~Correction « vouliez-vous dire ? » (distance d'édition)~~ : **non retenue**.
+  Seule la complétion par préfixe déjà offerte par le ghost-text `Ctrl+F1` est
+  proposée.
 
 ## 8. Mode capture
 

@@ -37,6 +37,9 @@ pub struct Contexte
     pub notification: Option<String>,
     /// Horodatage de lancement de la dernière commande, le cas échéant.
     pub horodatage: Option<String>,
+    /// Alerte de risque sur la commande en cours de saisie (risque détecté ou
+    /// simulation disponible).
+    pub alerte: Option<String>,
   }
 
 /// Zone gauche : rappel des touches, options découvertes et suggestion.
@@ -66,11 +69,15 @@ pub fn gauche(contexte: &Contexte) -> String
     fragments.join("   ")
   }
 
-/// Zone centre : alerte root, code retour (`ok` / `✗ N`), notification de fin
-/// de commande longue et horodatage de lancement.
+/// Zone centre : alerte de risque, alerte root, code retour (`ok` / `✗ N`),
+/// notification de fin de commande longue et horodatage de lancement.
 pub fn centre(contexte: &Contexte) -> String
   {
     let mut fragments: Vec<String> = Vec::new();
+    if let Some(alerte) = &contexte.alerte
+      {
+        fragments.push(alerte.clone());
+      }
     if contexte.root
       {
         fragments.push("ROOT!".to_string());
@@ -104,6 +111,7 @@ pub fn couleur_centre(contexte: &Contexte) -> (u8, u8, u8)
         Some(0) => VERT,
         Some(_) => ROUGE,
         None if contexte.root => ROUGE,
+        None if contexte.alerte.is_some() => JAUNE,
         None if contexte.notification.is_some() => JAUNE,
         None => TEXTE,
       }
@@ -170,5 +178,16 @@ mod tests
         let centre = centre(&contexte);
         assert!(centre.contains("8 s"));
         assert!(centre.contains("18:05:33"));
+      }
+
+    #[test]
+    fn une_alerte_de_risque_est_affichee_en_jaune()
+      {
+        let contexte = Contexte {
+          alerte: Some("⚠ suppression récursive d'une racine".to_string()),
+          ..Contexte::default()
+        };
+        assert!(centre(&contexte).contains("suppression récursive"));
+        assert_eq!(couleur_centre(&contexte), JAUNE);
       }
   }

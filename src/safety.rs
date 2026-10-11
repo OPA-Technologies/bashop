@@ -116,6 +116,19 @@ pub fn evaluer(commande: &str) -> Verdict
         motifs.push("secret en clair dans la ligne".to_string());
       }
 
+    if mots.first().copied() == Some("rsync")
+      && mots.iter().any(|m| matches!(*m, "--delete" | "--del"))
+      {
+        motifs.push("rsync avec écrasement à la destination (--delete)".to_string());
+      }
+
+    if mots.first().copied() == Some("git")
+      && mots.get(1).copied() == Some("clean")
+      && mots.iter().any(|m| m.starts_with('-') && m.contains('f'))
+      {
+        motifs.push("git clean force (effacement de fichiers non suivis)".to_string());
+      }
+
     let niveau = if motifs.iter().any(|m| est_danger(m))
       {
         Niveau::Danger
@@ -129,6 +142,57 @@ pub fn evaluer(commande: &str) -> Verdict
         Niveau::Avertissement
       };
     Verdict { niveau, motifs }
+  }
+
+/// Commande équivalente en **simulation** (`--dry-run` / `-n`) quand le
+/// programme en propose une, sinon `None`.
+///
+/// La liste est volontairement restreinte aux programmes dont l'option de
+/// simulation est stable et sans effet de bord (`rsync`, `make`, `apt`,
+/// `apt-get`, `pip`, `pip3`, `npm`, `git clean`). Le reste de la ligne est
+/// conservé intact (espaces, guillemets, redirections).
+pub fn simulation(commande: &str) -> Option<String>
+  {
+    let ligne = commande.trim();
+    let mots = lexer::decouper(ligne);
+    let programme = *mots.first()?;
+    let (position, option) = match programme
+      {
+        "rsync" | "pip" | "pip3" | "npm" => (0, "--dry-run"),
+        "make" => (0, "-n"),
+        "apt" | "apt-get" => (0, "-s"),
+        "git" if mots.get(1).copied() == Some("clean") => (1, "--dry-run"),
+        _ => return None,
+      };
+    Some(inserer_apres_jeton(ligne, position, option))
+  }
+
+/// Insère `option` juste après le `jeton`-ième mot (base 0) de `ligne`, sans
+/// altérer le reste de la chaîne.
+fn inserer_apres_jeton(ligne: &str, jeton: usize, option: &str) -> String
+  {
+    let mut vus = 0usize;
+    let mut dans_mot = false;
+    for (i, c) in ligne.char_indices()
+      {
+        if c.is_whitespace()
+          {
+            if dans_mot
+              {
+                if vus == jeton
+                  {
+                    return format!("{} {}{}", &ligne[..i], option, &ligne[i..]);
+                  }
+                vus += 1;
+                dans_mot = false;
+              }
+          }
+        else
+          {
+            dans_mot = true;
+          }
+      }
+    format!("{ligne} {option}")
   }
 
 #[cfg(test)]
@@ -166,5 +230,46 @@ mod tests
     fn une_bombe_a_fork_est_dangereuse()
       {
         assert_eq!(evaluer(":(){ :|:& };:").niveau, Niveau::Danger);
+      }
+
+    #[test]
+    fn rsync_propose_une_simulation_dry_run()
+      {
+        assert_eq!(
+          simulation("rsync --delete -a src/ dst/"),
+          Some("rsync --dry-run --delete -a src/ dst/".to_string())
+        );
+      }
+
+    #[test]
+    fn make_apt_pip_proposent_leur_option_de_simulation()
+      {
+        assert_eq!(simulation("make -j4"), Some("make -n -j4".to_string()));
+        assert_eq!(simulation("apt-get remove foo"), Some("apt-get -s remove foo".to_string()));
+        assert_eq!(simulation("pip install bar"), Some("pip --dry-run install bar".to_string()));
+      }
+
+    #[test]
+    fn git_clean_insere_l_option_apres_la_sous_commande()
+      {
+        assert_eq!(
+          simulation("git clean -fdx"),
+          Some("git clean --dry-run -fdx".to_string())
+        );
+      }
+
+    #[test]
+    fn une_commande_non_simulable_n_a_pas_de_simulation()
+      {
+        assert_eq!(simulation("ls -la"), None);
+        assert_eq!(simulation("rm -rf /"), None);
+        assert_eq!(simulation("git status"), None);
+      }
+
+    #[test]
+    fn rsync_delete_et_git_clean_force_sont_signales()
+      {
+        assert_eq!(evaluer("rsync --delete -a src/ dst/").niveau, Niveau::Avertissement);
+        assert_eq!(evaluer("git clean -fdx").niveau, Niveau::Avertissement);
       }
   }
