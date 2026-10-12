@@ -29,8 +29,6 @@ pub struct Contexte
     pub statut: Option<i32>,
     /// Options découvertes pour la commande en cours.
     pub options: Vec<String>,
-    /// Suggestion fantôme (historique).
-    pub suggestion: Option<String>,
     /// Une surcouche d'aide est ouverte.
     pub overlay: bool,
     /// Compteurs système compacts (cpu/mémoire/io), déjà mis en forme.
@@ -47,7 +45,7 @@ pub struct Contexte
     pub derniere_erreur: Option<String>,
   }
 
-/// Zone gauche : rappel des touches, options découvertes et suggestion.
+/// Zone gauche : rappel des touches et options découvertes.
 pub fn gauche(contexte: &Contexte) -> String
   {
     if contexte.overlay
@@ -55,10 +53,6 @@ pub fn gauche(contexte: &Contexte) -> String
         return "Échap ferme".to_string();
       }
     let mut fragments: Vec<String> = Vec::new();
-    if let Some(suggestion) = &contexte.suggestion
-      {
-        fragments.push(format!("↪ {suggestion}"));
-      }
     if !contexte.options.is_empty()
       {
         fragments.push(contexte.options.iter().take(4).cloned().collect::<Vec<_>>().join(" · "));

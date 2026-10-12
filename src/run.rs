@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use crossterm::event::{
   self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-  KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+  KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent,
+  MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
@@ -123,6 +124,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       let _ = write!(io::stdout(), "{}", reinitialiser_fond());
       let _ = execute!(
         io::stdout(),
+        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen,
         DisableMouseCapture,
         DisableBracketedPaste
@@ -134,6 +136,10 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     enable_raw_mode()?;
     let mut sortie = io::stdout();
     execute!(sortie, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    let _ = execute!(
+      sortie,
+      PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     write!(sortie, "{}", definir_fond())?;
     sortie.flush()?;
     let backend = CrosstermBackend::new(sortie);
@@ -151,7 +157,6 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       master: paire.master,
       enfant,
       overlay: None,
-      suggestion: None,
       ghost: None,
       decalage: 0,
       overlay_decalage: 0,
@@ -175,7 +180,13 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     disable_raw_mode()?;
     let arriere = terminal.backend_mut();
     let _ = write!(arriere, "{}", reinitialiser_fond());
-    execute!(arriere, LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
+    execute!(
+      arriere,
+      PopKeyboardEnhancementFlags,
+      LeaveAlternateScreen,
+      DisableMouseCapture,
+      DisableBracketedPaste
+    )?;
     arriere.flush()?;
     terminal.show_cursor()?;
     nettoyer_rc(rc);
@@ -209,7 +220,6 @@ struct App
     master: Box<dyn MasterPty + Send>,
     enfant: Box<dyn Child + Send + Sync>,
     overlay: Option<Overlay>,
-    suggestion: Option<String>,
     ghost: Option<String>,
     decalage: usize,
     overlay_decalage: usize,
@@ -356,8 +366,13 @@ impl App
                   return Ok(());
                 }
                 KeyCode::Char('c') if touche.modifiers.contains(KeyModifiers::CONTROL) => {
-                  self.suggestion = None;
                   self.ghost = None;
+                }
+                KeyCode::Enter if touche.modifiers.contains(KeyModifiers::ALT) => {
+                  return self.accepter_ghost_complet();
+                }
+                KeyCode::Enter if touche.modifiers.contains(KeyModifiers::CONTROL) => {
+                  return self.accepter_ghost_mot();
                 }
                 KeyCode::Enter => return self.valider(),
                 _ => {}
@@ -366,7 +381,6 @@ impl App
         let octets = encoder_touche(&touche);
         if !octets.is_empty()
           {
-            self.suggestion = None;
             self.ghost = None;
             self.ecrivain.write_all(&octets)?;
             self.ecrivain.flush()?;
@@ -577,7 +591,6 @@ impl App
         self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
         self.term.etat = EtatShell::Commande;
         self.debuter_commande();
-        self.suggestion = None;
         self.ghost = None;
         self.decalage = 0;
         self.overlay = None;
@@ -830,6 +843,47 @@ impl App
         None
       }
 
+    /// Ghost actif au prompt, prêt à être accepté : `reste` à insérer
+    /// (identique à ce que dessine `Vue`, l'éventuel ghost collant est prioritaire).
+    fn ghost_actif(&self) -> Option<String>
+      {
+        match &self.ghost
+          {
+            Some(ghost) => Some(ghost.clone()),
+            None => self.fantome_live().map(|(reste, _)| reste),
+          }
+      }
+
+    /// Récupère **toute** la chaîne suggérée (Alt+Entrée) : transmet `reste` au
+    /// shell sans valider ; le curseur reste en fin de ligne.
+    fn accepter_ghost_complet(&mut self) -> Result<()>
+      {
+        if let Some(reste) = self.ghost_actif()
+          && !reste.is_empty()
+          {
+            self.ecrivain.write_all(reste.as_bytes())?;
+            self.ecrivain.flush()?;
+            self.ghost = None;
+          }
+        Ok(())
+      }
+
+    /// Récupère le **mot suivant** de la suggestion (Ctrl+Entrée) : transmet le
+    /// prochain mot sans valider ni effacer la fin du ghost.
+    fn accepter_ghost_mot(&mut self) -> Result<()>
+      {
+        if let Some(reste) = self.ghost_actif()
+          {
+            let mot = prochain_mot(&reste);
+            if !mot.is_empty()
+              {
+                self.ecrivain.write_all(mot.as_bytes())?;
+                self.ecrivain.flush()?;
+              }
+          }
+        Ok(())
+      }
+
     fn meilleure_suggestion(&self, commande: &str) -> Option<String>
       {
         if commande.trim().is_empty()
@@ -940,6 +994,9 @@ impl App
           "F10       cette aide".to_string(),
           "F2        bascule le mode capture / secret".to_string(),
           String::new(),
+          "Alt+Entrée  accepte toute la suggestion (ghost)".to_string(),
+          "Ctrl+Entrée accepte le mot suivant de la suggestion".to_string(),
+          String::new(),
           format!("thème   : {}", self.theme.nom),
           format!("capture : {}", if self.config.capture { "on" } else { "off" }),
           format!("root    : {}", if self.root_actif() { "oui" } else { "non" }),
@@ -952,15 +1009,7 @@ impl App
 
     fn dessiner(&self, cadre: &mut ratatui::Frame)
       {
-        let (ghost, suggestion) = match &self.ghost
-          {
-            Some(ghost) => (Some(ghost.clone()), self.suggestion.clone()),
-            None => match self.fantome_live()
-              {
-                Some((reste, complet)) => (Some(reste), Some(complet)),
-                None => (None, self.suggestion.clone()),
-              },
-          };
+        let ghost = self.ghost_actif();
         let notification = match &self.notification
           {
             Some((texte, moment)) if moment.elapsed() < Duration::from_secs(6) => Some(texte.clone()),
@@ -973,7 +1022,6 @@ impl App
           fond: (self.theme.fond.r, self.theme.fond.g, self.theme.fond.b),
           identite: self.identite_courante(),
           options: self.options_courantes(),
-          suggestion,
           ghost: ghost.unwrap_or_default().chars().collect(),
           decalage: self.decalage,
           overlay_decalage: self.overlay_decalage,
@@ -996,7 +1044,6 @@ struct Vue<'a>
     fond: (u8, u8, u8),
     identite: String,
     options: Vec<String>,
-    suggestion: Option<String>,
     ghost: Vec<char>,
     decalage: usize,
     overlay_decalage: usize,
@@ -1034,7 +1081,6 @@ impl Vue<'_>
           root: self.root,
           statut: self.term.dernier_statut,
           options: self.options.clone(),
-          suggestion: self.suggestion.clone(),
           overlay: self.overlay.is_some(),
           systeme: self.systeme.clone(),
           notification: self.notification.clone(),
@@ -1328,6 +1374,25 @@ fn sequence_csi_tilde(code: u8, ctrl: bool, alt: bool, shift: bool) -> Vec<u8>
       {
         format!("\x1b[{code};{modificateur}~").into_bytes()
       }
+  }
+
+/// Prochain mot d'un reste de suggestion : conserve les séparateurs de tête
+/// puis prend la suite non-espace, **sans** l'espace suivant (pour que la
+/// suggestion reste un préfixe et que la fin du ghost demeure affichée).
+fn prochain_mot(reste: &str) -> String
+  {
+    let sans_tete = reste.trim_start();
+    if sans_tete.is_empty()
+      {
+        return String::new();
+      }
+    let fin = sans_tete
+      .char_indices()
+      .find(|(_, caractere)| caractere.is_whitespace())
+      .map(|(index, _)| index)
+      .unwrap_or(sans_tete.len());
+    let tete = reste.len() - sans_tete.len();
+    reste[..tete + fin].to_string()
   }
 
 /// Encode une touche en octets à transmettre au shell (Alt/Meta, Ctrl, Shift).
@@ -1773,7 +1838,6 @@ mod tests
           fond: crate::frame::FOND_CADRE,
           identite: "test@hote".to_string(),
           options: vec!["--all".to_string()],
-          suggestion: None,
           ghost: Vec::new(),
           decalage: 0,
           overlay_decalage: 0,
@@ -1804,7 +1868,6 @@ mod tests
           fond: crate::frame::FOND_CADRE,
           identite: "test@hote".to_string(),
           options: Vec::new(),
-          suggestion: None,
           ghost: Vec::new(),
           decalage: 0,
           overlay_decalage: 0,
@@ -1859,6 +1922,28 @@ mod tests
         assert_eq!(encoder_touche(&f1), b"\x1bOP".to_vec());
         let delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT);
         assert_eq!(encoder_touche(&delete), b"\x1b[3;2~".to_vec());
+      }
+
+    #[test]
+    fn prochain_mot_prend_le_mot_sans_l_espace_suivant()
+      {
+        assert_eq!(prochain_mot("atus --short"), "atus");
+        assert_eq!(prochain_mot("--short"), "--short");
+      }
+
+    #[test]
+    fn prochain_mot_conserve_les_separateurs_de_tete()
+      {
+        assert_eq!(prochain_mot(" --short"), " --short");
+        assert_eq!(prochain_mot(" BBB CCC"), " BBB");
+        assert_eq!(prochain_mot("   mot"), "   mot");
+      }
+
+    #[test]
+    fn prochain_mot_d_un_reste_vide_ne_donne_rien()
+      {
+        assert_eq!(prochain_mot(""), "");
+        assert_eq!(prochain_mot("   "), "");
       }
 
     #[test]

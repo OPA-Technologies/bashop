@@ -12,7 +12,7 @@ mod unix_impl
 
     /// Séquence de restauration écrite telle quelle sur la sortie standard.
     const RESTAURATION: &[u8] =
-      b"\x1b]110\x1b\\\x1b[?1049l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[0m\r\n";
+      b"\x1b[<1u\x1b]110\x1b\\\x1b[?1049l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?2004l\x1b[?25h\x1b[0m\r\n";
 
     static ACTIF: AtomicBool = AtomicBool::new(false);
     static PID_ENFANT: AtomicI32 = AtomicI32::new(0);

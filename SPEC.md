@@ -113,7 +113,8 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 Barre pleine largeur à trois zones :
 
 1. **Gauche — commandes/raccourcis** : `F1 - Aide rapide`, `F2 - Secret`,
-   `F10 - Aide`, puis les options découvertes et la suggestion fantôme.
+   `F10 - Aide`, puis les options découvertes. La suggestion fantôme n'y figure
+   pas : elle est déjà dessinée en gris après le curseur, sur la ligne de saisie.
 2. **Centre — code retour** : `✓ ok` en **vert** si `0`, `✗ N` en **rouge**
    sinon ; le préfixe `ROOT!` est ajouté sous bascule root. En cas d'échec
    (code non nul), la **première ligne** du message d'erreur est recopiée après
@@ -165,6 +166,15 @@ zone centrale.
 | `PagePréc` / `PageSuiv` | Défilement (respectivement vers les entrées plus anciennes / le bas), avec la **molette** dispo en continu. |
 | `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** : `F2` y bascule le mode secret, `F10` rafraîchit. |
 | `F2`       | Bascule le **mode secret / capture** on/off (session courante, persistable via `bashop capture`). |
+| `Alt+Entrée` | Récupère **toute** la suggestion fantôme (le texte gris après le curseur) et laisse le curseur en fin de ligne, **sans valider**. |
+| `Ctrl+Entrée` | Récupère le **mot suivant** de la suggestion fantôme, curseur après ce mot, **sans valider** et sans effacer la fin du ghost. |
+
+- **Ghost accepté au clavier** : la suggestion affichée après le curseur peut
+  être reprise progressivement, mot à mot (`Ctrl+Entrée`) ou d'un coup
+  (`Alt+Entrée`). Ces touches étant ambiguës sur les terminaux classiques,
+  le **protocole clavier Kitty** (`DISAMBIGUATE_ESCAPE_CODES`) est activé au
+  démarrage en *best-effort* (ignoré par les terminaux qui ne le gèrent pas) ;
+  sans ce protocole, `Ctrl+Entrée` retombe sur `Entrée` et valide la commande.
 
 - **Historique défilant** : les lignes évincées de la zone centrale sont
   conservées (10 000 lignes max) et redeviennent consultables par le défilement.

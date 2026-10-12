@@ -15,4 +15,8 @@ pub enum Action
     AideBashop,
     /// F2 — bascule du mode capture.
     BasculeCapture,
+    /// Alt+Entrée — accepte toute la suggestion fantôme, sans valider.
+    AccepteGhostComplet,
+    /// Ctrl+Entrée — accepte le mot suivant de la suggestion fantôme.
+    AccepteGhostMot,
   }
