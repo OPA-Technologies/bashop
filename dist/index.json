@@ -1,7 +1,7 @@
 {
   "name": "bashop",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "assets": [
-    { "os": "linux", "arch": "x86_64", "version": "0.2.8", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.2.8/bashop-0.2.8-linux-x86_64.tar.gz", "sha256": "8e7b58a434f1928c3b1922a728019705695906d02e9f952d6aeebdc1ddf8b10c" }
+    { "os": "linux", "arch": "x86_64", "version": "0.2.9", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.2.9/bashop-0.2.9-linux-x86_64.tar.gz", "sha256": "3262c38e4d9f8c42102cb7c7913d1137e42eb3544f368439819deb49ea659be7" }
   ]
 }

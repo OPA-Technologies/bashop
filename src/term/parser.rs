@@ -330,6 +330,15 @@ mod tests
       }
 
     #[test]
+    fn l_encodage_souris_seul_n_active_pas_le_suivi()
+      {
+        let mut term = Terminal::nouveau(10, 3);
+        alimenter(&mut term, b"\x1b[?1006h\x1b[?1015h");
+        assert!(!term.suivi_souris());
+        assert_eq!(term.souris, SourisMode::Aucune);
+      }
+
+    #[test]
     fn le_collage_encadre_suit_le_decset()
       {
         let mut term = Terminal::nouveau(10, 3);

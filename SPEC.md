@@ -156,14 +156,13 @@ parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), ch
 
 Actif **uniquement au prompt** (état détecté). Dès qu'une commande est en
 cours d'exécution, **toutes** les touches sont transmises au shell/au programme,
-sauf **PagePréc/PageSuiv** et la **molette** qui pilotent le défilement de la
-zone centrale.
+sauf **PagePréc/PageSuiv** qui pilotent le défilement de la zone centrale.
 
 | Touche     | Action |
 |------------|--------|
 | `F1`       | Aide rapide de la commande en cours de saisie : `--help` d'abord (fork borné), sinon page `man` (bornée), sinon historique. |
 | `Ctrl+F1`  | Ouvre la page `man` de la commande en cours dans un pop-up (bornée). |
-| `PagePréc` / `PageSuiv` | Défilement (respectivement vers les entrées plus anciennes / le bas), avec la **molette** dispo en continu. |
+| `PagePréc` / `PageSuiv` | Défilement de l'historique (respectivement vers les entrées plus anciennes / le bas). |
 | `F10`      | Aide de Bashop (touches, thèmes, options). Sert aussi de **menu** : `F2` y bascule le mode secret, `F10` rafraîchit. |
 | `F2`       | Bascule le **mode secret / capture** on/off (session courante, persistable via `bashop capture`). |
 | `Alt+Entrée` | Récupère **toute** la suggestion fantôme (le texte gris après le curseur) et laisse le curseur en fin de ligne, **sans valider**. |
@@ -178,15 +177,18 @@ zone centrale.
 
 - **Historique défilant** : les lignes évincées de la zone centrale sont
   conservées (10 000 lignes max) et redeviennent consultables par le défilement.
-- Au retour au bas de l'affichage (PageSuiv / molette bas), le curseur réapparaît
-  sur le prompt.
+- Au retour au bas de l'affichage (PageSuiv), le curseur réapparaît sur le
+  prompt.
 
 Les **pop-ups** (F1, F10) recouvrent la **zone centrale** uniquement : les 3
 lignes du cadre (stat, prompt, context) restent visibles.
 
-- **Souris déléguée** : si le programme lancé active le suivi souris
-  (DECSET `1000`/`1002`/`1003`, encodage `1006`/`1015`), les événements souris
-  lui sont **transmis** ; sinon la molette fait défiler l'historique.
+- **Souris déléguée à la demande** : la souris n'est captée au niveau du
+  terminal que lorsque le programme lancé active le suivi souris
+  (DECSET `1000`/`1002`/`1003` ; encodage `1006`/`1015`), auquel cas les
+  événements souris lui sont **transmis**. Sinon la capture est relâchée : le
+  terminal conserve sa **sélection** et son **copier-coller natifs** (molette
+  comprise), et l'historique se parcourt avec `PagePréc`/`PageSuiv`.
 - **Écran alterné** : `DECSET 1049` sauvegarde grille et curseur et les
   restaure à la sortie (le scrollback survit à `vim`/`less`).
 

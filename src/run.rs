@@ -135,7 +135,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     restauration::installer();
     enable_raw_mode()?;
     let mut sortie = io::stdout();
-    execute!(sortie, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(sortie, EnterAlternateScreen, EnableBracketedPaste)?;
     let _ = execute!(
       sortie,
       PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -172,6 +172,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       instant_commande: None,
       notification: None,
       quitter: false,
+      capture_souris: false,
     };
 
     let resultat = app.boucle(&mut terminal);
@@ -235,6 +236,7 @@ struct App
     instant_commande: Option<String>,
     notification: Option<(String, Instant)>,
     quitter: bool,
+    capture_souris: bool,
   }
 
 impl App
@@ -259,6 +261,7 @@ impl App
                       self.dernier_flux = Instant::now();
                       self.rafraichir_privilege();
                       self.sur_fin_commande();
+                      self.maj_capture_souris(terminal)?;
                       sale = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -722,8 +725,32 @@ impl App
           }
       }
 
-    /// Traite un évènement souris : transmis si l'enfant l'a demandé, sinon
-    /// utilisé pour défiler l'historique.
+    /// Miroite au niveau du terminal la demande de suivi souris de l'enfant :
+    /// la capture n'est activée que lorsqu'un programme enfant la réclame
+    /// (DECSET `1000`/`1002`/`1003`), afin de préserver la sélection et le
+    /// copier-coller natifs au prompt.
+    fn maj_capture_souris(&mut self, terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>) -> Result<()>
+      {
+        let suivi = self.term.suivi_souris();
+        if let Some(actif) = bascule_capture(self.capture_souris, suivi)
+          {
+            let arriere = terminal.backend_mut();
+            if actif
+              {
+                execute!(arriere, EnableMouseCapture)?;
+              }
+            else
+              {
+                execute!(arriere, DisableMouseCapture)?;
+              }
+            arriere.flush()?;
+            self.capture_souris = actif;
+          }
+        Ok(())
+      }
+
+    /// Traite un évènement souris : transmis si l'enfant l'a demandé. À défaut
+    /// (repli), la molette fait défiler l'historique.
     fn souris(&mut self, ev: &MouseEvent) -> Result<()>
       {
         if self.term.suivi_souris()
@@ -1458,6 +1485,20 @@ fn bouton_base(bouton: MouseButton) -> u8
       }
   }
 
+/// Bascule de capture souris nécessaire : `None` si l'état est inchangé,
+/// `Some(actif)` (activer/désactiver) sinon.
+fn bascule_capture(avant: bool, apres: bool) -> Option<bool>
+  {
+    if avant == apres
+      {
+        None
+      }
+    else
+      {
+        Some(apres)
+      }
+  }
+
 /// Encode un évènement souris selon le protocole demandé par le programme.
 fn encoder_souris(term: &Terminal, ev: &MouseEvent) -> Option<Vec<u8>>
   {
@@ -1989,6 +2030,20 @@ mod tests
           modifiers: KeyModifiers::NONE,
         };
         assert!(encoder_souris(&term, &ev).is_none());
+      }
+
+    #[test]
+    fn bascule_capture_ne_rien_fait_si_l_etat_est_inchange()
+      {
+        assert_eq!(bascule_capture(false, false), None);
+        assert_eq!(bascule_capture(true, true), None);
+      }
+
+    #[test]
+    fn bascule_capture_active_ou_desactive_selon_le_suivi()
+      {
+        assert_eq!(bascule_capture(false, true), Some(true));
+        assert_eq!(bascule_capture(true, false), Some(false));
       }
 
     #[test]
