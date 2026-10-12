@@ -120,8 +120,8 @@ Barre pleine largeur à trois zones :
    (code non nul), la **première ligne** du message d'erreur est recopiée après
    le code (`✗ N — message`). Copie **purement observationnelle** : la sortie
    réelle du shell, son code retour et ses redirections ne sont jamais altérés.
-3. **Droite — compteurs système** compacts (cpu / mémoire / io), rafraîchis
-   toutes les **0,5 s**.
+3. **Droite — compteurs système** compacts (io / réseau / mémoire / cpu),
+   rafraîchis toutes les **0,5 s**.
 
 Style par défaut : fond B2 `#2E3440` (identique au reste du cadre), texte F1
 `#E6EDF3`, gras.

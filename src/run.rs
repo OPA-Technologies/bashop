@@ -1882,7 +1882,7 @@ mod tests
           ghost: Vec::new(),
           decalage: 0,
           overlay_decalage: 0,
-          systeme: "CPU 5%  MEM 20%  IO 0 o/s".to_string(),
+          systeme: "IO 0 o/s  Net ↓0 o/s ↑0 o/s  MEM 20%  CPU 5%".to_string(),
           overlay: None,
           notification: None,
           horodatage: None,
@@ -1895,6 +1895,7 @@ mod tests
         assert!(texte.contains('@'), "identité absente : {texte}");
         assert!(texte.contains("Aide rapide"), "contexte absent : {texte}");
         assert!(texte.contains("CPU 5%"), "compteurs système absents : {texte}");
+        assert!(texte.contains("Net ↓"), "compteurs réseau absents : {texte}");
       }
 
     #[test]

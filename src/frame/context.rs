@@ -2,7 +2,8 @@
 //!
 //! Barre pleine largeur à trois zones : à gauche les commandes/raccourcis, au
 //! centre le code retour (vert + « ok » si nul, rouge sinon), à droite les
-//! compteurs système compacts (cpu / mémoire / io), rafraîchis en continu.
+//! compteurs système compacts (io / réseau / mémoire / cpu), rafraîchis en
+//! continu.
 
 /// Surlignage par défaut de `term_context`.
 pub const FOND: (u8, u8, u8) = super::FOND_CADRE;
@@ -31,7 +32,8 @@ pub struct Contexte
     pub options: Vec<String>,
     /// Une surcouche d'aide est ouverte.
     pub overlay: bool,
-    /// Compteurs système compacts (cpu/mémoire/io), déjà mis en forme.
+    /// Compteurs système compacts (io / réseau / mémoire / cpu), déjà mis en
+    /// forme.
     pub systeme: String,
     /// Notification de fin de commande longue (transitoire).
     pub notification: Option<String>,
@@ -100,7 +102,7 @@ pub fn centre(contexte: &Contexte) -> String
     fragments.join(" ")
   }
 
-/// Zone droite : compteurs système compacts (cpu/mémoire/io).
+/// Zone droite : compteurs système compacts (io / réseau / mémoire / cpu).
 pub fn droite(contexte: &Contexte) -> String
   {
     contexte.systeme.clone()

@@ -331,7 +331,7 @@ pub fn drapeau(code: &str) -> String
     drapeau
   }
 
-/// Mesure compacte cpu/mémoire/io, rafraîchie périodiquement.
+/// Mesure compacte io / réseau / mémoire / cpu, rafraîchie périodiquement.
 ///
 /// Les débits sont calculés par différence entre deux échantillons successifs.
 pub struct MesureSysteme
@@ -345,6 +345,8 @@ struct Echantillon
     cpu_total: u64,
     cpu_inactif: u64,
     io_octets: u64,
+    net_entree: u64,
+    net_sortie: u64,
     instant: Instant,
   }
 
@@ -364,11 +366,14 @@ impl MesureSysteme
         let maintenant = Instant::now();
         let (cpu_total, cpu_inactif) = lire_cpu();
         let io_octets = lire_io();
+        let (net_entree, net_sortie) = lire_net();
         if let Some(precedent) = &self.precedent
           {
             let delta_total = cpu_total.saturating_sub(precedent.cpu_total);
             let delta_inactif = cpu_inactif.saturating_sub(precedent.cpu_inactif);
             let delta_io = io_octets.saturating_sub(precedent.io_octets);
+            let delta_net_entree = net_entree.saturating_sub(precedent.net_entree);
+            let delta_net_sortie = net_sortie.saturating_sub(precedent.net_sortie);
             let secondes = maintenant.duration_since(precedent.instant).as_secs_f64().max(0.001);
             let cpu = if delta_total > 0
               {
@@ -378,11 +383,27 @@ impl MesureSysteme
               {
                 0.0
               };
-            let debit = delta_io as f64 / secondes;
+            let debit_io = delta_io as f64 / secondes;
+            let debit_entree = delta_net_entree as f64 / secondes;
+            let debit_sortie = delta_net_sortie as f64 / secondes;
             let memoire = lire_memoire();
-            self.texte = format!("CPU {:>3.0}%  MEM {:>2}%  IO {}", cpu, memoire, debit_lisible(debit));
+            self.texte = format!(
+              "IO {}  Net ↓{} ↑{}  MEM {:>2}%  CPU {:>3.0}%",
+              debit_lisible(debit_io),
+              debit_lisible(debit_entree),
+              debit_lisible(debit_sortie),
+              memoire,
+              cpu
+            );
           }
-        self.precedent = Some(Echantillon { cpu_total, cpu_inactif, io_octets, instant: maintenant });
+        self.precedent = Some(Echantillon {
+          cpu_total,
+          cpu_inactif,
+          io_octets,
+          net_entree,
+          net_sortie,
+          instant: maintenant,
+        });
       }
   }
 
@@ -446,6 +467,45 @@ fn lire_io() -> u64
         octets = octets.saturating_add((lus.saturating_add(ecrits)).saturating_mul(512));
       }
     octets
+  }
+
+/// Lit `/proc/net/dev` et renvoie le total (octets reçus, octets émis).
+fn lire_net() -> (u64, u64)
+  {
+    let Ok(contenu) = std::fs::read_to_string("/proc/net/dev") else
+      {
+        return (0, 0);
+      };
+    parse_reseau(&contenu)
+  }
+
+/// Somme les octets reçus/émis de `/proc/net/dev`, en **ignorant `lo`** (le
+/// trafic loopback ne doit pas gonfler le débit affiché).
+fn parse_reseau(contenu: &str) -> (u64, u64)
+  {
+    let mut recus = 0u64;
+    let mut emis = 0u64;
+    for ligne in contenu.lines()
+      {
+        let Some((interface, reste)) = ligne.split_once(':') else
+          {
+            continue;
+          };
+        if interface.trim() == "lo"
+          {
+            continue;
+          }
+        let champs: Vec<&str> = reste.split_whitespace().collect();
+        if champs.len() < 9
+          {
+            continue;
+          }
+        let octets_recus = champs[0].parse::<u64>().unwrap_or(0);
+        let octets_emis = champs[8].parse::<u64>().unwrap_or(0);
+        recus = recus.saturating_add(octets_recus);
+        emis = emis.saturating_add(octets_emis);
+      }
+    (recus, emis)
   }
 
 fn debit_lisible(octets_par_seconde: f64) -> String
@@ -729,5 +789,25 @@ mod tests
       {
         assert_eq!(debit_lisible(512.0), "512 o/s");
         assert_eq!(debit_lisible(1536.0), "1.5 Ko/s");
+      }
+
+    #[test]
+    fn parse_reseau_somme_les_interfaces_en_ignorant_lo()
+      {
+        let contenu = "\
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 1000       10    0    0    0     0          0         0     1000      10    0    0    0     0       0          0
+  eth0: 5000       20    0    0    0     0          0         0     2500      15    0    0    0     0       0          0
+ wlan0: 3000       30    0    0    0     0          0         0     1500      25    0    0    0     0       0          0
+";
+        assert_eq!(parse_reseau(contenu), (8000, 4000));
+      }
+
+    #[test]
+    fn parse_reseau_replie_sur_zero_si_aucune_interface()
+      {
+        assert_eq!(parse_reseau(""), (0, 0));
+        assert_eq!(parse_reseau("face |bytes\n  eth0: 1 2 3\n"), (0, 0));
       }
   }
