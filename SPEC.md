@@ -106,13 +106,17 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 - Le FQDN privilégie `hostname -f`, puis `hostname -d`, `dnsdomainname` et
   `/etc/resolv.conf` (domaine/localisé), sans jamais revenir à un hôte nu si un
   domaine est résoluble.
+- En **mode capture** (secret), la ligne passe par `providers::masquer` : le nom
+  d'hôte, le FQDN, l'IP et les secrets y sont masqués comme dans la zone
+  centrale, de sorte que `term_stat` reste synchronisé avec la bascule `F2`.
 - Style par défaut : fond B1 `#2E3440`, texte F1 `#E6EDF3`, gras.
 
 ### 3.2 `term_context` (dernière ligne)
 
 Barre pleine largeur à trois zones :
 
-1. **Gauche — commandes/raccourcis** : `F1 - Aide rapide`, `F2 - Secret`,
+1. **Gauche — commandes/raccourcis** : `F1 - Aide rapide`, le libellé de `F2`
+   (dynamique : `F2 - Secret` quand la capture est on, `F2 - Capture` sinon),
    `F10 - Aide`, puis les options découvertes. La suggestion fantôme n'y figure
    pas : elle est déjà dessinée en gris après le curseur, sur la ligne de saisie.
 2. **Centre — code retour** : `✓ ok` en **vert** si `0`, `✗ N` en **rouge**
@@ -135,6 +139,11 @@ parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), ch
 - **Fond commun au cadre** : la couleur de fond par défaut du terminal est fixée
   à celle des trois lignes (`#2E3440`, via `OSC 11`, rétablie à la sortie par
   `OSC 110`) ; le prompt partage donc le fond de `term_stat` et `term_context`.
+  Le **préfixe** du prompt (heure, `user@host`, chemin, numéro, suffixe) porte en
+  outre explicitement le fond du thème (comme `term_stat`/`term_context`,
+  couleurs conservées) et une **réinitialisation complète** précède la saisie :
+  seule l'invite est en surbrillance, le texte tapé par l'utilisateur garde le
+  fond par défaut.
 
 - **Épinglé sur l'avant-dernière ligne** : le curseur du shell est repositionné
   sur la dernière ligne de sa zone (juste au-dessus de `term_context`) à chaque
@@ -187,8 +196,12 @@ lignes du cadre (stat, prompt, context) restent visibles.
   terminal que lorsque le programme lancé active le suivi souris
   (DECSET `1000`/`1002`/`1003` ; encodage `1006`/`1015`), auquel cas les
   événements souris lui sont **transmis**. Sinon la capture est relâchée : le
-  terminal conserve sa **sélection** et son **copier-coller natifs** (molette
-  comprise), et l'historique se parcourt avec `PagePréc`/`PageSuiv`.
+  terminal conserve sa **sélection** et son **copier-coller natifs**.
+- **Molette = affichage, jamais l'historique** : le défilement alterné
+  (`DECSET 1007`) est désactivé au démarrage (rétabli à la sortie, *best-effort*)
+  afin que la molette ne soit plus traduite en `↑`/`↓` — ce qui rappelait
+  l'historique du shell au prompt. Le défilement de la zone centrale se fait avec
+  `PagePréc`/`PageSuiv`.
 - **Écran alterné** : `DECSET 1049` sauvegarde grille et curseur et les
   restaure à la sortie (le scrollback survit à `vim`/`less`).
 

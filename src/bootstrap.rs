@@ -12,20 +12,67 @@ const OSC_PROMPT: &str = "\\e]133;A\\e\\\\";
 /// Marqueur de début de commande (OSC 133;B).
 const OSC_COMMANDE: &str = "\\e]133;B\\e\\\\";
 
-fn couleur(rgb: (u8, u8, u8), gras: bool) -> String
+/// SGR `[intensité;]38;2;fg;48;2;fond` : avant-plan **et** fond du cadre, pour
+/// que le préfixe du prompt partage la bande de `term_stat`/`term_context`.
+fn couleur(rgb: (u8, u8, u8), gras: bool, fond: (u8, u8, u8)) -> String
   {
     let intensite = if gras { 1 } else { 0 };
-    format!("\\e[{};38;2;{};{};{}m", intensite, rgb.0, rgb.1, rgb.2)
+    format!(
+      "\\e[{};38;2;{};{};{};48;2;{};{};{}m",
+      intensite, rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
   }
 
-fn couleur_italique(rgb: (u8, u8, u8)) -> String
+/// SGR `3;38;2;fg;48;2;fond` : italique sur le fond du cadre.
+fn couleur_italique(rgb: (u8, u8, u8), fond: (u8, u8, u8)) -> String
   {
-    format!("\\e[3;38;2;{};{};{}m", rgb.0, rgb.1, rgb.2)
+    format!(
+      "\\e[3;38;2;{};{};{};48;2;{};{};{}m",
+      rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
   }
 
+/// SGR `48;2;fond` : fond du cadre seul (pose la bande dès le début du prompt,
+/// y compris l'effacement de fin de ligne provoqué par l'épinglage).
+fn fond_sgr(fond: (u8, u8, u8)) -> String
+  {
+    format!("\\e[48;2;{};{};{}m", fond.0, fond.1, fond.2)
+  }
+
+/// Variante zsh : mêmes séquences, enveloppées dans `%{ … %}` (largeur nulle).
+fn couleur_zsh(rgb: (u8, u8, u8), gras: bool, fond: (u8, u8, u8)) -> String
+  {
+    let intensite = if gras { 1 } else { 0 };
+    format!(
+      "%{{\\e[{};38;2;{};{};{};48;2;{};{};{}m%}}",
+      intensite, rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+fn couleur_italique_zsh(rgb: (u8, u8, u8), fond: (u8, u8, u8)) -> String
+  {
+    format!(
+      "%{{\\e[3;38;2;{};{};{};48;2;{};{};{}m%}}",
+      rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+fn fond_zsh(fond: (u8, u8, u8)) -> String
+  {
+    format!("%{{\\e[48;2;{};{};{}m%}}", fond.0, fond.1, fond.2)
+  }
+
+/// Réinitialisation complète : la saisie retrouve le fond par défaut.
 const REINIT: &str = "\\e[0m";
+/// Réinitialise avant-plan, graisse et italique **sans** toucher au fond : la
+/// bande du cadre se poursuit d'un segment à l'autre.
+const REINIT_ATTR: &str = "\\e[39m\\e[22m\\e[23m";
+/// Réinitialisation complète zsh.
+const REINIT_ZSH: &str = "%{\\e[0m%}";
+/// Réinitialisation zsh sans toucher au fond.
+const REINIT_ATTR_ZSH: &str = "%{\\e[39m\\e[22m\\e[23m%}";
 const COULEUR_CHEMIN: (u8, u8, u8) = (0x89, 0xB4, 0xFA);
-const COULEUR_HISTORIQUE: (u8, u8, u8) = (0x6C, 0x70, 0x86);
+const COULEUR_HISTORIQUE: (u8, u8, u8) = (0x93, 0x99, 0xB2);
 const COULEUR_HEURE: (u8, u8, u8) = (0x8B, 0xA1, 0xB9);
 /// Épingle le prompt sur la dernière ligne de la zone du shell (avant-dernière
 /// ligne de l'écran) puis efface la fin de ligne.
@@ -44,21 +91,28 @@ pub fn suffixe_cadre(theme: &Theme, largeur: u16) -> String
 /// La ligne affiche l'heure de début de commande (`__BASHOP_HEURE`), `user@host`,
 /// le chemin absolu (`${PWD}`), le numéro de commande entre parenthèses
 /// (`__BASHOP_HIST`, gris italique, cadré à droite) et le suffixe.
+///
+/// Tout le préfixe (jusqu'au suffixe et à l'espace qui suit) porte le **fond du
+/// cadre** ; une réinitialisation complète précède `OSC 133;B`, de sorte que la
+/// saisie de l'utilisateur retrouve le fond par défaut.
 pub fn prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
   {
     let accent = (theme.accent.r, theme.accent.g, theme.accent.b);
+    let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
     let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
     format!(
-      "\\[{pin}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{reinit}\\] \\[{user}\\]\\u@\\h\\[{reinit}\\] \\[{chemin}\\]${{PWD}}\\[{reinit}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{reinit}\\] \\[{suffixe_col}\\]{suffixe}\\[{reinit}\\] \\[{osc_commande}\\]",
+      "\\[{fond}\\]\\[{pin}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe} \\[{reinit}\\]\\[{osc_commande}\\]",
+      fond = fond_sgr(fond),
       pin = PIN,
       osc_prompt = OSC_PROMPT,
-      heure = couleur_italique(COULEUR_HEURE),
-      user = couleur(accent, true),
-      reinit = REINIT,
-      chemin = couleur(COULEUR_CHEMIN, false),
-      hist = couleur_italique(COULEUR_HISTORIQUE),
-      suffixe_col = couleur(suffixe, true),
+      heure = couleur_italique(COULEUR_HEURE, fond),
+      ra = REINIT_ATTR,
+      user = couleur(accent, true, fond),
+      chemin = couleur(COULEUR_CHEMIN, false, fond),
+      hist = couleur_italique(COULEUR_HISTORIQUE, fond),
+      suffixe_col = couleur(suffixe, true, fond),
       suffixe = suffixe_cadre(theme, largeur_suffixe),
+      reinit = REINIT,
       osc_commande = OSC_COMMANDE,
     )
   }
@@ -67,25 +121,20 @@ pub fn prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
 pub fn prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
   {
     let accent = (theme.accent.r, theme.accent.g, theme.accent.b);
+    let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
     let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
-    let accent_hex = format!("#{:02x}{:02x}{:02x}", accent.0, accent.1, accent.2);
     format!(
-      "{pin}%{{\\e[3;38;2;{heure_r};{heure_g};{heure_b}m%}}${{__BASHOP_HEURE}}%{{\\e[0m%}} %{{%B%F{{{accent}}}%}}%n@%m%{{\\e[0m%}} %{{\\e[38;2;{chemin_r};{chemin_g};{chemin_b}m%}}/%{{\\e[0m%}} %{{\\e[3;38;2;{hist_r};{hist_g};{hist_b}m%}}${{__BASHOP_HIST}}%{{\\e[0m%}} %{{\\e[1;38;2;{suf_r};{suf_g};{suf_b}m%}}{suffixe}%{{\\e[0m%}} ",
+      "{fond}{pin}{heure}${{__BASHOP_HEURE}}{ra} {user}%n@%m{ra} {chemin}/{ra} {hist}${{__BASHOP_HIST}}{ra} {suf}{suffixe} {reinit}",
+      fond = fond_zsh(fond),
       pin = PIN_ZSH,
-      heure_r = COULEUR_HEURE.0,
-      heure_g = COULEUR_HEURE.1,
-      heure_b = COULEUR_HEURE.2,
-      accent = accent_hex,
-      chemin_r = COULEUR_CHEMIN.0,
-      chemin_g = COULEUR_CHEMIN.1,
-      chemin_b = COULEUR_CHEMIN.2,
-      hist_r = COULEUR_HISTORIQUE.0,
-      hist_g = COULEUR_HISTORIQUE.1,
-      hist_b = COULEUR_HISTORIQUE.2,
-      suf_r = suffixe.0,
-      suf_g = suffixe.1,
-      suf_b = suffixe.2,
+      heure = couleur_italique_zsh(COULEUR_HEURE, fond),
+      ra = REINIT_ATTR_ZSH,
+      user = couleur_zsh(accent, true, fond),
+      chemin = couleur_zsh(COULEUR_CHEMIN, false, fond),
+      hist = couleur_italique_zsh(COULEUR_HISTORIQUE, fond),
+      suf = couleur_zsh(suffixe, true, fond),
       suffixe = suffixe_cadre(theme, largeur_suffixe),
+      reinit = REINIT_ZSH,
     )
   }
 
@@ -317,6 +366,26 @@ mod tests
       {
         assert!(prompt_bash(&CLASSIQUE, 6).contains("${LINES};1H"));
         assert!(prompt_zsh(&CLASSIQUE, 6).contains("${LINES};1H"));
+      }
+
+    #[test]
+    fn le_prefixe_du_prompt_porte_le_fond_du_cadre()
+      {
+        let fond = format!("48;2;{};{};{}", CLASSIQUE.fond.r, CLASSIQUE.fond.g, CLASSIQUE.fond.b);
+        let bash = prompt_bash(&CLASSIQUE, 6);
+        assert!(bash.contains(&fond), "fond du cadre absent : {bash}");
+        let zsh = prompt_zsh(&CLASSIQUE, 6);
+        assert!(zsh.contains(&fond), "fond du cadre absent (zsh) : {zsh}");
+      }
+
+    #[test]
+    fn le_prompt_reinitialise_le_fond_avant_la_saisie()
+      {
+        let bash = prompt_bash(&CLASSIQUE, 6);
+        let commande = bash.find("133;B").expect("marqueur de commande");
+        let suffixe = bash.find(">>").expect("suffixe");
+        let reset = bash[..commande].rfind("\\e[0m").expect("reset avant la commande");
+        assert!(suffixe < reset, "le reset doit suivre le suffixe : {bash}");
       }
 
     #[test]

@@ -121,7 +121,12 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
       let _ = disable_raw_mode();
-      let _ = write!(io::stdout(), "{}", reinitialiser_fond());
+      let _ = write!(
+        io::stdout(),
+        "{}{}",
+        reinitialiser_fond(),
+        REACTIVER_DEFILEMENT_ALTERNE
+      );
       let _ = execute!(
         io::stdout(),
         PopKeyboardEnhancementFlags,
@@ -140,7 +145,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       sortie,
       PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     );
-    write!(sortie, "{}", definir_fond())?;
+    write!(sortie, "{}{}", definir_fond(), DESACTIVER_DEFILEMENT_ALTERNE)?;
     sortie.flush()?;
     let backend = CrosstermBackend::new(sortie);
     let mut terminal = RatTerminal::new(backend)?;
@@ -180,7 +185,12 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     restauration::desactiver();
     disable_raw_mode()?;
     let arriere = terminal.backend_mut();
-    let _ = write!(arriere, "{}", reinitialiser_fond());
+    let _ = write!(
+      arriere,
+      "{}{}",
+      reinitialiser_fond(),
+      REACTIVER_DEFILEMENT_ALTERNE
+    );
     execute!(
       arriere,
       PopKeyboardEnhancementFlags,
@@ -200,6 +210,16 @@ fn definir_fond() -> String
     let (r, g, b) = crate::frame::FOND_CADRE;
     format!("\x1b]11;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\")
   }
+
+/// Désactive le défilement alterné (`DECSET 1007`). Sans cela, le terminal
+/// traduit la molette en `↑`/`↓` dans l'écran alterné : au prompt, cela rappelle
+/// l'historique du shell au lieu de faire défiler l'affichage. Le défilement de
+/// la zone centrale reste assuré par `PagePréc`/`PageSuiv`, et la **sélection
+/// native** (donc le copier-coller) est préservée puisque la souris n'est pas
+/// captée au prompt.
+const DESACTIVER_DEFILEMENT_ALTERNE: &str = "\x1b[?1007l";
+/// Rétablit le défilement alterné à la sortie (best-effort).
+const REACTIVER_DEFILEMENT_ALTERNE: &str = "\x1b[?1007h";
 
 /// Séquence OSC 110 : rétablit la couleur de fond par défaut du terminal.
 fn reinitialiser_fond() -> &'static str
@@ -750,7 +770,8 @@ impl App
       }
 
     /// Traite un évènement souris : transmis si l'enfant l'a demandé. À défaut
-    /// (repli), la molette fait défiler l'historique.
+    /// (repli), la molette fait défiler l'**affichage** (jamais l'historique du
+    /// shell : l'alternate-scroll est désactivé au démarrage).
     fn souris(&mut self, ev: &MouseEvent) -> Result<()>
       {
         if self.term.suivi_souris()
@@ -1093,7 +1114,7 @@ impl Vue<'_>
             return;
           }
 
-        let stat_texte = stat::contenu(largeur, &self.identite);
+        let stat_texte = stat::contenu(largeur, &self.identite, self.config.capture);
         let stat_style = Style::default()
           .fg(couleur_tuple(stat::TEXTE))
           .bg(couleur_tuple(self.fond))

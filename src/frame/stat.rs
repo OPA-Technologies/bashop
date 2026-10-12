@@ -61,7 +61,12 @@ pub fn repartir(gauche: &str, centre: &str, droite: &str, largeur: usize) -> Str
 ///
 /// `identite` est fournie par l'appelant (identité dynamique sous reprise root)
 /// pour éviter des résolutions coûteuses à chaque rendu.
-pub fn contenu(largeur: u16, identite: &str) -> String
+///
+/// Sous `capture` (mode secret), la ligne est passée par [`providers::masquer`]
+/// de sorte que `term_stat` reste synchronisé avec la bascule F2 : le nom
+/// d'hôte, le FQDN, l'IP et les secrets n'y apparaissent jamais plus longtemps
+/// que dans la zone centrale.
+pub fn contenu(largeur: u16, identite: &str, capture: bool) -> String
   {
     let fqdn = providers::fqdn();
     let gauche = match providers::adresse_ip()
@@ -85,7 +90,15 @@ pub fn contenu(largeur: u16, identite: &str) -> String
       {
         droite.push_str(&format!(" · UTC {}", utc));
       }
-    repartir(&gauche, &centre, &droite, largeur as usize)
+    let ligne = repartir(&gauche, &centre, &droite, largeur as usize);
+    if capture
+      {
+        providers::masquer(&ligne)
+      }
+    else
+      {
+        ligne
+      }
   }
 
 #[cfg(test)]
@@ -114,5 +127,15 @@ mod tests
       {
         let ligne = repartir("aaaaaaaaaa", "", "", 4);
         assert_eq!(ligne, "aaaa");
+      }
+
+    #[test]
+    fn la_ligne_est_masquee_sous_capture()
+      {
+        let clair = contenu(80, "user@10.0.0.1", false);
+        assert!(clair.contains("10.0.0.1"), "l'IP doit apparaître hors capture : {clair}");
+        let masque = contenu(80, "user@10.0.0.1", true);
+        assert!(!masque.contains("10.0.0.1"), "l'IP doit être masquée sous capture : {masque}");
+        assert!(masque.contains("x.x.x.x"), "masque IPv4 attendu : {masque}");
       }
   }

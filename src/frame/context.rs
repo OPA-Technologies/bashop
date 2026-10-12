@@ -15,8 +15,14 @@ pub const VERT: (u8, u8, u8) = (0x89, 0xD1, 0x85);
 pub const ROUGE: (u8, u8, u8) = (0xFF, 0x6B, 0x6B);
 /// Couleur d'une notification de fin de commande longue.
 pub const JAUNE: (u8, u8, u8) = (0xF9, 0xE2, 0xAF);
-/// Rappel compact des raccourcis du chrome.
-pub const TOUCHES: &str = "F1 - Aide rapide   F2 - Secret   F10 - Aide";
+/// Rappel compact des raccourcis du chrome. Le libellé de `F2` reflète le mode
+/// **actif** : `F2 - Secret` quand la capture (masquage) est on, `F2 - Capture`
+/// sinon.
+pub fn rappel_touches(capture: bool) -> String
+  {
+    let f2 = if capture { "F2 - Secret" } else { "F2 - Capture" };
+    format!("F1 - Aide rapide   {f2}   F10 - Aide")
+  }
 
 /// Vue du contexte au moment du rendu.
 #[derive(Clone, Debug, Default)]
@@ -59,7 +65,7 @@ pub fn gauche(contexte: &Contexte) -> String
       {
         fragments.push(contexte.options.iter().take(4).cloned().collect::<Vec<_>>().join(" · "));
       }
-    fragments.push(TOUCHES.to_string());
+    fragments.push(rappel_touches(contexte.capture));
     fragments.join("   ")
   }
 
@@ -130,10 +136,21 @@ mod tests
     #[test]
     fn le_rappel_des_touches_est_toujours_present()
       {
-        let ligne = gauche(&Contexte::default());
-        assert!(ligne.contains("F1 - Aide rapide"));
-        assert!(ligne.contains("F2 - Secret"));
-        assert!(ligne.contains("F10 - Aide"));
+        let secret = gauche(&Contexte { capture: true, ..Contexte::default() });
+        assert!(secret.contains("F1 - Aide rapide"));
+        assert!(secret.contains("F2 - Secret"));
+        assert!(secret.contains("F10 - Aide"));
+      }
+
+    #[test]
+    fn le_libelle_de_f2_suit_le_mode_actif()
+      {
+        let secret = gauche(&Contexte { capture: true, ..Contexte::default() });
+        assert!(secret.contains("F2 - Secret"), "{secret}");
+        assert!(!secret.contains("F2 - Capture"), "{secret}");
+        let clair = gauche(&Contexte { capture: false, ..Contexte::default() });
+        assert!(clair.contains("F2 - Capture"), "{clair}");
+        assert!(!clair.contains("F2 - Secret"), "{clair}");
       }
 
     #[test]
