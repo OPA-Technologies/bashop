@@ -153,6 +153,7 @@ pub fn script_prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
     rc.push_str(PUBLIER_PRIVILEGE);
     rc.push_str("}\n");
     rc.push_str("PROMPT_COMMAND=\"__bashop_precmd${PROMPT_COMMAND:+; ${PROMPT_COMMAND//__bashop_osc/}}\"\n");
+    rc.push_str("bind 'set horizontal-scroll-mode on'\n");
     rc.push_str(&format!("PS1='{}'\n", prompt_bash(theme, largeur_suffixe)));
     rc
   }
@@ -399,6 +400,10 @@ mod tests
         assert!(script.contains("PS1="));
         assert!(script.contains("${__BASHOP_HIST}"));
         assert!(script.contains("133;A"));
+        assert!(
+          script.contains("horizontal-scroll-mode on"),
+          "la saisie doit rester mono-ligne (pas de repli qui casse l'épinglage)"
+        );
       }
 
     #[test]

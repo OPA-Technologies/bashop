@@ -145,6 +145,40 @@ impl Grid
           }
       }
 
+    /// Supprime `n` caractères à partir d'une colonne : la fin de ligne se
+    /// décale vers la gauche et les dernières cellules deviennent vierges
+    /// (DCH, `CSI P`). Utilisé par readline pour raccourcir la ligne.
+    pub fn supprimer_caracteres(&mut self, lig: u16, depuis: u16, n: u16, modele: Cellule)
+      {
+        if lig >= self.hauteur || depuis >= self.largeur
+          {
+            return;
+          }
+        let n = n.min(self.largeur - depuis);
+        for col in depuis..self.largeur
+          {
+            let source = col + n;
+            let cellule = if source < self.largeur { self.cellule(lig, source) } else { modele };
+            self.poser(lig, col, cellule);
+          }
+      }
+
+    /// Insère `n` caractères vierges à partir d'une colonne : la fin de ligne
+    /// se décale vers la droite, les débordements sont perdus (ICH, `CSI @`).
+    pub fn inserer_caracteres(&mut self, lig: u16, depuis: u16, n: u16, modele: Cellule)
+      {
+        if lig >= self.hauteur || depuis >= self.largeur
+          {
+            return;
+          }
+        let n = n.min(self.largeur - depuis);
+        for col in (depuis..self.largeur).rev()
+          {
+            let cellule = if col >= depuis + n { self.cellule(lig, col - n) } else { modele };
+            self.poser(lig, col, cellule);
+          }
+      }
+
     /// Efface toute la grille.
     pub fn effacer_ecran(&mut self, modele: Cellule)
       {
@@ -268,6 +302,30 @@ mod tests
         grille.defiler_haut();
         assert_eq!(grille.arriere_plan_len(), 1);
         assert_eq!(grille.arriere_plan(0).and_then(|l| l.first()).map(|c| c.c), Some('A'));
+      }
+
+    #[test]
+    fn la_suppression_decale_la_fin_de_ligne_vers_la_gauche()
+      {
+        let mut grille = Grid::nouvelle(6, 1);
+        for (col, c) in "ABCDEF".chars().enumerate()
+          {
+            grille.poser(0, col as u16, Cellule { c, ..Cellule::default() });
+          }
+        grille.supprimer_caracteres(0, 1, 2, Cellule::default());
+        assert_eq!(grille.texte_ligne(0), "ADEF  ");
+      }
+
+    #[test]
+    fn l_insertion_decale_la_fin_de_ligne_vers_la_droite()
+      {
+        let mut grille = Grid::nouvelle(6, 1);
+        for (col, c) in "ABCDEF".chars().enumerate()
+          {
+            grille.poser(0, col as u16, Cellule { c, ..Cellule::default() });
+          }
+        grille.inserer_caracteres(0, 1, 2, Cellule::default());
+        assert_eq!(grille.texte_ligne(0), "A  BCD");
       }
 
     #[test]

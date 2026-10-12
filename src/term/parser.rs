@@ -207,6 +207,20 @@ impl Perform for Terminal
             }
             'J' => self.effacer_ecran_mode(parametre(params, 0, 0, true)),
             'K' => self.effacer_ligne_mode(parametre(params, 0, 0, true)),
+            'P' => {
+              let n = parametre(params, 0, 1, false);
+              let modele = self.cellule_effacement();
+              let lig = self.grid.curseur_lig;
+              let col = self.grid.curseur_col;
+              self.grid.supprimer_caracteres(lig, col, n, modele);
+            }
+            '@' => {
+              let n = parametre(params, 0, 1, false);
+              let modele = self.cellule_effacement();
+              let lig = self.grid.curseur_lig;
+              let col = self.grid.curseur_col;
+              self.grid.inserer_caracteres(lig, col, n, modele);
+            }
             'm' => self.sgr(params),
             'h' => self.mode(params, prive, true),
             'l' => self.mode(params, prive, false),
@@ -322,6 +336,24 @@ mod tests
         assert!(!term.paste_bracketed);
         alimenter(&mut term, b"\x1b[?2004h");
         assert!(term.paste_bracketed);
+      }
+
+    #[test]
+    fn csi_p_supprime_des_caracteres_a_partir_du_curseur()
+      {
+        let mut term = Terminal::nouveau(10, 2);
+        alimenter(&mut term, b"ABCDEF");
+        alimenter(&mut term, b"\r\x1b[2C\x1b[2P");
+        assert_eq!(term.grid.texte_ligne(0), "ABEF      ");
+      }
+
+    #[test]
+    fn csi_arobase_insere_des_caracteres_au_curseur()
+      {
+        let mut term = Terminal::nouveau(10, 2);
+        alimenter(&mut term, b"ABCDEF");
+        alimenter(&mut term, b"\r\x1b[2C\x1b[2@");
+        assert_eq!(term.grid.texte_ligne(0), "AB  CDEF  ");
       }
 
     #[test]
