@@ -94,7 +94,7 @@ pub const COULEUR_HISTORIQUE: Rgb = Rgb::new(0x93, 0x99, 0xB2);
 /// Couleur par défaut de l'heure de début de commande dans le prompt.
 pub const COULEUR_HEURE: Rgb = Rgb::new(0x8B, 0xA1, 0xB9);
 /// Part de blanc appliquée aux couleurs du thème `wheel` (classique éclairci).
-pub const ECLAIRCISSEMENT_WHEEL: f32 = 0.40;
+pub const ECLAIRCISSEMENT_WHEEL: f32 = 0.30;
 
 /// Couleurs choisies par l'utilisateur dans `~/.opshellrc`. Une valeur absente
 /// (`None`) laisse le défaut du thème. Les surcharges ne s'appliquent qu'aux

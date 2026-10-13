@@ -265,7 +265,7 @@ zones `term_stat`, `term_context` et au prompt, et seulement pour les thèmes
 
 - `classique` : choix utilisateur rendu **tel quel** ;
 - `wheel` : les couleurs du `classique` (personnalisées ou par défaut) sont
-  **toujours éclaircies d'environ 40 % vers le blanc**, prompt compris ;
+  **toujours éclaircies d'environ 30 % vers le blanc**, prompt compris ;
 - `root` : **figé** — aucune personnalisation n'est appliquée.
 
 Les six clés (`STAT_FG`, `STAT_BG`, `CONTEXT_FG`, `CONTEXT_BG`, `PROMPT_FG`,
