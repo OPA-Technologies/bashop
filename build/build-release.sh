@@ -2,11 +2,17 @@
 #
 # Construit le binaire Bashop en release et assemble l'archive pré-compilée.
 #
-# Aucun binaire n'est « noarch » : chaque OS/architecture reçoit son archive.
-# C'est l'installateur (`install.sh`) qui est noarch et choisit la bonne.
+# Aucun binaire n'est « noarch » : chaque OS/architecture/variante reçoit son
+# archive. C'est l'installateur (`install.sh`) qui est noarch et choisit la
+# bonne entrée de l'index selon l'OS et l'architecture détectés.
 #
 # Usage : build/build-release.sh [cible]
 #   cible : "native" (défaut) ou un triplet rust, ex. x86_64-unknown-linux-musl
+#
+# Compilation croisée : les cibles non natives sont bâties via `cargo zigbuild`
+# (zig) quand l'outil est disponible, sinon via `cargo build --target`. Les
+# cibles musl donnent un binaire statique (ciblé DSM/SRM) et portent la
+# variante « musl » dans le nom d'archive.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -51,6 +57,16 @@ os_arch()
     printf '%s %s' "$os" "$arch"
   }
 
+# Variante d'archive associée à une cible (suffixe du nom), vide si aucune.
+variante_cible()
+  {
+    local cible="$1"
+    case "$cible" in
+      *musl*) printf 'musl' ;;
+      *) printf '' ;;
+    esac
+  }
+
 if [ "$CIBLE" = "native" ]
   then
     SPEC=()
@@ -61,13 +77,20 @@ if [ "$CIBLE" = "native" ]
     BIN_PATH="$ROOT/target/$CIBLE/release/$BIN"
   fi
 
-cargo build --release "${SPEC[@]}" --manifest-path "$ROOT/Cargo.toml"
+if [ "$CIBLE" = "native" ] || ! command -v cargo-zigbuild >/dev/null 2>&1
+  then
+    cargo build --release "${SPEC[@]}" --manifest-path "$ROOT/Cargo.toml"
+  else
+    rustup target add "$CIBLE" >/dev/null 2>&1 || true
+    cargo zigbuild --release "${SPEC[@]}" --manifest-path "$ROOT/Cargo.toml"
+  fi
 
 read -r OS ARCH <<<"$(os_arch "$CIBLE")"
 [ "$OS" != "inconnu" ] && [ "$ARCH" != "inconnu" ] || { printf 'Cible non reconnue : %s\n' "$CIBLE" >&2; exit 1; }
+VARIANTE="$(variante_cible "$CIBLE")"
 
 DIST="$ROOT/dist"
-NOM="bashop-$VERSION-$OS-$ARCH"
+NOM="bashop-$VERSION-$OS-$ARCH${VARIANTE:+-$VARIANTE}"
 STAGE="$DIST/$NOM"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/licenses"

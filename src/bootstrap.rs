@@ -77,30 +77,32 @@ const PIN: &str = "\\e[${LINES};1H\\e[K";
 /// Variante zsh de l'épinglage (délimiteurs `%{ %}`).
 const PIN_ZSH: &str = "%{\\e[${LINES};1H\\e[K%}";
 
-/// Cadre (cadrage à droite) du suffixe de prompt sur la largeur normalisée.
+/// Cadre (cadrage à gauche) du suffixe de prompt sur la largeur normalisée : le
+/// glyphe colle au segment précédent, le remplissage suit, la largeur restant
+/// constante pour ne pas décaler le curseur.
 pub fn suffixe_cadre(glyphe: &str, largeur: u16) -> String
   {
-    format!("{:>largeur$}", glyphe, largeur = largeur as usize)
+    format!("{:<largeur$}", glyphe, largeur = largeur as usize)
   }
 
 /// Construit la chaîne `PS1` de bash pour un thème donné.
 ///
-/// La ligne affiche l'heure de début de commande (`__BASHOP_HEURE`), `user@host`,
-/// le chemin absolu (`${PWD}`), le numéro de commande entre parenthèses
-/// (`__BASHOP_HIST`, gris italique, cadré à droite) et le suffixe.
+/// La ligne affiche l'heure de début de commande (`__BASHOP_HEURE`), le numéro
+/// de commande entre parenthèses (`__BASHOP_HIST`, gris italique), `user@host`,
+/// le chemin absolu (`${PWD}`) puis le suffixe, sans espace superflu entre le
+/// chemin et le suffixe.
 ///
-/// Tout le préfixe (jusqu'au suffixe et à l'espace qui suit) porte le **fond du
-/// cadre**. Le fond n'est posé qu'**après** l'épinglage, de sorte que
-/// l'effacement de fin de ligne (`\e[K`) se fait sur le fond **par défaut** :
-/// seule l'invite est surlignée, jamais le reste de la ligne. Une
-/// réinitialisation complète précède `OSC 133;B`, donc la saisie de l'utilisateur
-/// garde le fond par défaut.
+/// Tout le préfixe (jusqu'au suffixe) porte le **fond du cadre**. Le fond n'est
+/// posé qu'**après** l'épinglage, de sorte que l'effacement de fin de ligne
+/// (`\e[K`) se fait sur le fond **par défaut** : seule l'invite est surlignée,
+/// jamais le reste de la ligne. Une réinitialisation complète précède
+/// `OSC 133;B`, donc la saisie de l'utilisateur garde le fond par défaut.
 pub fn prompt_bash(palette: &Palette, glyphe: &str, largeur_suffixe: u16) -> String
   {
     let accent = palette.prompt_fg.tuple();
     let fond = palette.prompt_bg.tuple();
     format!(
-      "\\[{reinit}\\]\\[{pin}\\]\\[{fond}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe} \\[{reinit}\\]\\[{osc_commande}\\]",
+      "\\[{reinit}\\]\\[{pin}\\]\\[{fond}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe}\\[{reinit}\\]\\[{osc_commande}\\]",
       fond = fond_sgr(fond),
       pin = PIN,
       osc_prompt = OSC_PROMPT,
@@ -122,7 +124,7 @@ pub fn prompt_zsh(palette: &Palette, glyphe: &str, largeur_suffixe: u16) -> Stri
     let accent = palette.prompt_fg.tuple();
     let fond = palette.prompt_bg.tuple();
     format!(
-      "{reinit}{pin}{fond}{heure}${{__BASHOP_HEURE}}{ra} {user}%n@%m{ra} {chemin}/{ra} {hist}${{__BASHOP_HIST}}{ra} {suf}{suffixe} {reinit}",
+      "{reinit}{pin}{fond}{heure}${{__BASHOP_HEURE}}{ra} {hist}${{__BASHOP_HIST}}{ra} {user}%n@%m{ra} {chemin}${{PWD}}{ra} {suf}{suffixe}{reinit}",
       fond = fond_zsh(fond),
       pin = PIN_ZSH,
       heure = couleur_italique_zsh(palette.prompt_heure.tuple(), fond),
@@ -350,7 +352,7 @@ mod tests
     #[test]
     fn le_suffixe_est_cadre_sur_la_largeur()
       {
-        assert_eq!(suffixe_cadre(">>", 6), "    >>");
+        assert_eq!(suffixe_cadre(">>", 6), ">>    ");
       }
 
     #[test]

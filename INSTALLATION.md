@@ -28,14 +28,26 @@ Options de `install.sh` :
 
 - `PREFIX` : répertoire d'installation (défaut `~/.local`).
 - `VERSION` : version à installer (défaut : la plus récente de l'index).
+- `VARIANTE` : variante d'archive à privilégier (`musl` sur Synology, vide =
+  binaire natif de l'OS). Détectée automatiquement sur DSM.
 - `BASHOP_BIN` : chemin d'un binaire local à installer au lieu de télécharger.
 - `BASHOP_INDEX` : URL de l'index JSON (défaut : releases GitHub).
 
+`install.sh` **sélectionne** l'entrée de l'index selon l'OS et l'architecture
+détectés (et la variante), puis vérifie le SHA256 de l'archive avant de
+l'installer.
+
 ## Cibles binaires produites
 
-`linux x86_64`, `linux aarch64` / `armv7`, `freebsd x86_64` / `armv7`,
-`windows x86_64`. Les binaires Linux sont liés statiquement (musl) quand la
-cible le permet, pour couvrir les systèmes embarqués (DSM/SRM).
+| Plateforme | Archive | Liaison |
+|------------|---------|---------|
+| Ubuntu / Linux x86_64 | `bashop-<v>-linux-x86_64.tar.gz` | glibc |
+| Synology DS220+ / DSM 7.2 (Linux x86_64) | `bashop-<v>-linux-x86_64-musl.tar.gz` | statique (musl) |
+| FreeBSD CURRENT / STABLE (amd64) | `bashop-<v>-freebsd-x86_64.tar.gz` | `libc.so.7` |
+
+Autres cibles prévues : `linux aarch64`/`armv7`, `freebsd armv7`,
+`windows x86_64`. Les binaires Linux statiques (musl) couvrent les systèmes
+embarqués (DSM/SRM). La compilation croisée utilise `cargo zigbuild` (zig).
 
 ## Depuis les sources (développement)
 

@@ -2,9 +2,12 @@
 #
 # Génère dist/index.json à partir des archives pré-compilées de dist/.
 #
-# L'index est le point d'entrée de l'installateur noarch : il associe os/arch à
-# une URL d'archive et à son empreinte SHA256. Le nom de fichier porte la
-# nomenclature : bashop-<version>-<os>-<arch>.tar.gz
+# L'index est le point d'entrée de l'installateur noarch : il associe os/arch
+# (et variante optionnelle) à une URL d'archive et à son empreinte SHA256.
+# Le nom de fichier porte la nomenclature :
+#   bashop-<version>-<os>-<arch>.tar.gz          (sans variante)
+#   bashop-<version>-<os>-<arch>-<variante>.tar.gz
+# ex. bashop-0.5.1-linux-x86_64-musl.tar.gz
 #
 # Variable d'environnement :
 #   BASHOP_BASE_URL   préfixe des URL (défaut : dépôt GitHub releases)
@@ -32,19 +35,24 @@ if [ "${#archives[@]}" -eq 0 ]
   for archive in "${archives[@]}"
     do
       base="$(basename "$archive")"
-      # bashop-<version>-<os>-<arch>.tar.gz
+      # bashop-<version>-<os>-<arch>[-<variante>].tar.gz
       reste="${base#bashop-}"
       sans_ext="${reste%.tar.gz}"
       v="${sans_ext%%-*}"
       reste2="${sans_ext#*-}"
       os="${reste2%%-*}"
-      arch="${reste2#*-}"
+      reste3="${reste2#*-}"
+      arch="${reste3%%-*}"
+      case "$reste3" in
+        *-*) variante="${reste3#*-}" ;;
+        *) variante="" ;;
+      esac
       sha="$(sha256sum "$archive" | awk '{print $1}')"
       url="$BASE_URL/v$v/$base"
       [ "$premier" -eq 0 ] && printf ',\n'
       premier=0
-      printf '    { "os": "%s", "arch": "%s", "version": "%s", "url": "%s", "sha256": "%s" }' \
-        "$os" "$arch" "$v" "$url" "$sha"
+      printf '    { "os": "%s", "arch": "%s", "version": "%s", "variante": "%s", "url": "%s", "sha256": "%s" }' \
+        "$os" "$arch" "$v" "$variante" "$url" "$sha"
     done
   printf '\n  ]\n'
   printf '}\n'

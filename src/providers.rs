@@ -135,38 +135,59 @@ fn resolver_ptrs(ip: &str) -> Option<String>
     let (pointeur, longueur): (*const libc::sockaddr, libc::socklen_t) = match adresse
       {
         std::net::IpAddr::V4(v4) => {
-          let sock = libc::sockaddr_in {
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: 0,
-            sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(v4.octets()) },
-            sin_zero: [0; 8],
-          };
+          let mut sock: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+          sock.sin_family = libc::AF_INET as libc::sa_family_t;
+          sock.sin_port = 0;
+          sock.sin_addr = libc::in_addr { s_addr: u32::from_ne_bytes(v4.octets()) };
           (
             &sock as *const libc::sockaddr_in as *const libc::sockaddr,
             std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
           )
         }
         std::net::IpAddr::V6(v6) => {
-          let sock = libc::sockaddr_in6 {
-            sin6_family: libc::AF_INET6 as libc::sa_family_t,
-            sin6_port: 0,
-            sin6_flowinfo: 0,
-            sin6_addr: libc::in6_addr { s6_addr: v6.octets() },
-            sin6_scope_id: 0,
-          };
+          let mut sock: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+          sock.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+          sock.sin6_port = 0;
+          sock.sin6_flowinfo = 0;
+          sock.sin6_addr = libc::in6_addr { s6_addr: v6.octets() };
+          sock.sin6_scope_id = 0;
           (
             &sock as *const libc::sockaddr_in6 as *const libc::sockaddr,
             std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
           )
         }
       };
+    // Les « size_t » (BSD, macOS) remplacent les « socklen_t » (Linux/Android)
+    // pour la taille des buffers hôte/service de `getnameinfo`.
+    #[cfg(any(
+      target_os = "freebsd",
+      target_os = "openbsd",
+      target_os = "netbsd",
+      target_os = "dragonfly",
+      target_os = "macos",
+      target_os = "ios",
+      target_os = "tvos",
+      target_os = "watchos"
+    ))]
+    type TailleTampon = libc::size_t;
+    #[cfg(not(any(
+      target_os = "freebsd",
+      target_os = "openbsd",
+      target_os = "netbsd",
+      target_os = "dragonfly",
+      target_os = "macos",
+      target_os = "ios",
+      target_os = "tvos",
+      target_os = "watchos"
+    )))]
+    type TailleTampon = libc::socklen_t;
     let mut tampon = vec![0u8; libc::NI_MAXHOST as usize];
     let code = unsafe {
       libc::getnameinfo(
         pointeur,
         longueur,
         tampon.as_mut_ptr() as *mut libc::c_char,
-        tampon.len() as libc::socklen_t,
+        tampon.len() as TailleTampon,
         std::ptr::null_mut(),
         0,
         libc::NI_NAMEREQD,

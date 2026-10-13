@@ -60,7 +60,7 @@ pub struct Theme
 pub const CLASSIQUE: Theme =
   Theme {
     nom: "classique",
-    accent: Rgb::new(0xA6, 0xE3, 0xA1),
+    accent: Rgb::new(0x8A, 0xE6, 0x8F),
     suffixe: Suffixe { glyphe: ">>", couleur: Rgb::new(0x4E, 0x9A, 0x06) },
     fond: Rgb::new(0x2E, 0x34, 0x40),
   };
@@ -88,13 +88,16 @@ pub const TEXTE_CADRE: Rgb = Rgb::new(0xE6, 0xED, 0xF3);
 /// Fond par défaut du cadre (`term_stat`, `term_context`, prompt).
 pub const FOND_CADRE: Rgb = Rgb::new(0x2E, 0x34, 0x40);
 /// Couleur par défaut du chemin dans le prompt.
-pub const COULEUR_CHEMIN: Rgb = Rgb::new(0x89, 0xB4, 0xFA);
+pub const COULEUR_CHEMIN: Rgb = Rgb::new(0x6E, 0xA8, 0xFF);
 /// Couleur par défaut du numéro d'historique dans le prompt.
-pub const COULEUR_HISTORIQUE: Rgb = Rgb::new(0x93, 0x99, 0xB2);
+pub const COULEUR_HISTORIQUE: Rgb = Rgb::new(0xA6, 0xB0, 0xCC);
 /// Couleur par défaut de l'heure de début de commande dans le prompt.
-pub const COULEUR_HEURE: Rgb = Rgb::new(0x8B, 0xA1, 0xB9);
+pub const COULEUR_HEURE: Rgb = Rgb::new(0x7E, 0xB0, 0xDE);
 /// Part de blanc appliquée aux couleurs du thème `wheel` (classique éclairci).
 pub const ECLAIRCISSEMENT_WHEEL: f32 = 0.30;
+/// Part de blanc appliquée aux **fonds** du thème `wheel` (stat, contexte,
+/// prompt) : plus faible, pour resserrer l'écart de fond avec `classique`.
+pub const ECLAIRCISSEMENT_WHEEL_FOND: f32 = 0.20;
 
 /// Couleurs choisies par l'utilisateur dans `~/.opshellrc`. Une valeur absente
 /// (`None`) laisse le défaut du thème. Les surcharges ne s'appliquent qu'aux
@@ -197,18 +200,21 @@ impl Palette
           }
       }
 
-    /// Éclaircit toutes les couleurs vers le blanc.
-    fn eclaircir(&mut self, facteur: f32)
+    /// Éclaircit les couleurs vers le blanc : texte à `ECLAIRCISSEMENT_WHEEL`,
+    /// fonds (stat, contexte, prompt) à `ECLAIRCISSEMENT_WHEEL_FOND`.
+    fn eclaircir(&mut self)
       {
-        self.stat_fg = eclaircir_rgb(self.stat_fg, facteur);
-        self.stat_bg = eclaircir_rgb(self.stat_bg, facteur);
-        self.contexte_fg = eclaircir_rgb(self.contexte_fg, facteur);
-        self.contexte_bg = eclaircir_rgb(self.contexte_bg, facteur);
-        self.prompt_fg = eclaircir_rgb(self.prompt_fg, facteur);
-        self.prompt_bg = eclaircir_rgb(self.prompt_bg, facteur);
-        self.prompt_chemin = eclaircir_rgb(self.prompt_chemin, facteur);
-        self.prompt_historique = eclaircir_rgb(self.prompt_historique, facteur);
-        self.prompt_heure = eclaircir_rgb(self.prompt_heure, facteur);
+        let texte = ECLAIRCISSEMENT_WHEEL;
+        let fond = ECLAIRCISSEMENT_WHEEL_FOND;
+        self.stat_fg = eclaircir_rgb(self.stat_fg, texte);
+        self.stat_bg = eclaircir_rgb(self.stat_bg, fond);
+        self.contexte_fg = eclaircir_rgb(self.contexte_fg, texte);
+        self.contexte_bg = eclaircir_rgb(self.contexte_bg, fond);
+        self.prompt_fg = eclaircir_rgb(self.prompt_fg, texte);
+        self.prompt_bg = eclaircir_rgb(self.prompt_bg, fond);
+        self.prompt_chemin = eclaircir_rgb(self.prompt_chemin, texte);
+        self.prompt_historique = eclaircir_rgb(self.prompt_historique, texte);
+        self.prompt_heure = eclaircir_rgb(self.prompt_heure, texte);
       }
   }
 
@@ -245,7 +251,7 @@ pub fn palette(theme: &Theme, surcharge: &Surcharge) -> Palette
     palette.appliquer(surcharge);
     if theme.nom == "wheel"
       {
-        palette.eclaircir(ECLAIRCISSEMENT_WHEEL);
+        palette.eclaircir();
       }
     palette
   }
@@ -365,6 +371,17 @@ mod tests
             && wheel.prompt_fg.b >= classique.prompt_fg.b,
           "l'accent wheel doit être plus clair : {wheel:?}"
         );
+      }
+
+    #[test]
+    fn le_fond_wheel_est_moins_eclairci_que_le_texte()
+      {
+        let classique = palette(&CLASSIQUE, &Surcharge::default());
+        let wheel = palette(&WHEEL, &Surcharge::default());
+        assert_eq!(wheel.stat_bg, eclaircir_rgb(classique.stat_bg, ECLAIRCISSEMENT_WHEEL_FOND));
+        assert_eq!(wheel.contexte_bg, eclaircir_rgb(classique.contexte_bg, ECLAIRCISSEMENT_WHEEL_FOND));
+        assert_eq!(wheel.prompt_bg, eclaircir_rgb(classique.prompt_bg, ECLAIRCISSEMENT_WHEEL_FOND));
+        assert_eq!(wheel.stat_fg, eclaircir_rgb(classique.stat_fg, ECLAIRCISSEMENT_WHEEL));
       }
 
     #[test]

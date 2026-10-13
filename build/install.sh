@@ -2,9 +2,10 @@
 #
 # Installateur noarch de Bashop.
 #
-# Détecte l'OS et l'architecture, télécharge le binaire pré-compilé correspondant
-# depuis l'index JSON, vérifie son empreinte SHA256, l'installe sous PREFIX puis
-# branche le bootstrap dans les rc des shells.
+# Détecte l'OS et l'architecture, lit l'index JSON, choisit l'archive
+# pré-compilée correspondante (os + architecture + variante éventuelle),
+# télécharge, vérifie son empreinte SHA256, installe sous PREFIX puis branche
+# le bootstrap dans les rc des shells.
 #
 # Aucune chaîne de compilation Rust n'est requise : c'est indispensable sur les
 # cibles sans compilateur (DSM 7.2, SRM...).
@@ -12,6 +13,7 @@
 # Variables d'environnement :
 #   PREFIX         répertoire d'installation (défaut : ~/.local)
 #   VERSION        version à installer (défaut : la plus récente de l'index)
+#   VARIANTE       variante demandée (défaut : détection — musl sur Synology)
 #   BASHOP_BIN     chemin d'un binaire local à installer au lieu de télécharger
 #   BASHOP_INDEX   URL de l'index JSON
 #
@@ -20,6 +22,7 @@ set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
 VERSION="${VERSION:-}"
+VARIANTE="${VARIANTE:-}"
 BASHOP_BIN="${BASHOP_BIN:-}"
 BASHOP_INDEX="${BASHOP_INDEX:-https://github.com/OPA-Technologies/bashop/releases/latest/download/index.json}"
 
@@ -73,12 +76,22 @@ arch_normalise()
     esac
   }
 
-# Extrait la valeur d'une clé JSON scalaire, sans dépendre d'un parseur externe.
-valeur_json()
+# Détecte une machine Synology (DSM) : binaire Linux lié statiquement (musl).
+est_synology()
   {
-    fichier="$1"
-    cle="$2"
-    sed -n "s/.*\"$cle\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$fichier" | head -n1
+    [ -f /etc/synoinfo.conf ] || [ -d /etc.defaults ]
+  }
+
+# Variante préférée pour l'os donné (détection si VARIANTE non renseignée).
+variante_preferee()
+  {
+    [ -n "$VARIANTE" ] && { printf '%s' "$VARIANTE"; return; }
+    if [ "$1" = "linux" ] && est_synology
+      then
+        printf 'musl'
+      else
+        printf ''
+      fi
   }
 
 # Vérifie l'empreinte SHA256 d'un fichier (sha256sum, shasum ou openssl).
@@ -101,6 +114,37 @@ verifier_sha256()
     [ "$obtenu" = "$attendu" ] || erreur "SHA256 invalide (attendu $attendu, obtenu $obtenu)."
   }
 
+# Choisit l'archive de l'index : filtre os/arch/version, puis préfère la
+# variante voulue (repli : première archive éligible). Écrit url puis sha sur
+# deux lignes dans $1/index.json et un tmp.
+choisir_archive()
+  {
+    index="$1"
+    want="$(variante_preferee "$os")"
+    match=""
+    repli=""
+    awk -F'"' -v OS="$os" -v ARCH="$arch" -v VER="$VERSION" '
+      /"os"/ {
+        if ($4 == OS && $8 == ARCH && (VER == "" || $12 == VER))
+          printf "%s|%s|%s|%s\n", $16, $12, $20, $24
+      }' "$index" > "$index.cand"
+    [ -s "$index.cand" ] || erreur "aucune archive pour $os/$arch${VERSION:+ (version $VERSION)}."
+    while IFS='|' read -r va _ url sha
+      do
+        [ -z "$repli" ] && repli="$url|$sha"
+        if [ -z "$match" ] && [ "$va" = "$want" ]
+          then
+            match="$url|$sha"
+          fi
+      done < "$index.cand"
+    rm -f "$index.cand"
+    [ -z "$match" ] && match="$repli"
+    url="${match%%|*}"
+    sha="${match##*|}"
+    [ -n "$url" ] || erreur "index invalide : champ url absent."
+    printf '%s\n%s\n' "$url" "$sha"
+  }
+
 main()
   {
     os="$(os_normalise)"
@@ -117,9 +161,10 @@ main()
       else
         info "récupération de l'index : $BASHOP_INDEX"
         telecharger "$BASHOP_INDEX" "$tmp/index.json"
-        url="$(valeur_json "$tmp/index.json" "url")"
-        sha="$(valeur_json "$tmp/index.json" "sha256")"
-        [ -n "$url" ] || erreur "index invalide : champ url absent."
+        # « url » puis « sha256 » sur deux lignes successives.
+        choisi="$(choisir_archive "$tmp/index.json")"
+        url="$(printf '%s\n' "$choisi" | sed -n 1p)"
+        sha="$(printf '%s\n' "$choisi" | sed -n 2p)"
         info "téléchargement : $url"
         telecharger "$url" "$tmp/archive.tar.gz"
         [ -n "$sha" ] && verifier_sha256 "$tmp/archive.tar.gz" "$sha"
@@ -132,10 +177,10 @@ main()
     mkdir -p "$PREFIX/bin"
     install -m 0755 "$binaire" "$PREFIX/bin/bashop" 2>/dev/null \
       || { cp "$binaire" "$PREFIX/bin/bashop" && chmod 0755 "$PREFIX/bin/bashop"; }
-    info "installé : $PREFIX/bin/bashop"
+    info "installe : $PREFIX/bin/bashop"
 
     "$PREFIX/bin/bashop" install \
-      || info "bootstrap non posé (à relancer : $PREFIX/bin/bashop install)"
+      || info "bootstrap non pose (a relancer : $PREFIX/bin/bashop install)"
   }
 
 main "$@"

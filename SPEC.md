@@ -139,8 +139,10 @@ Style par défaut : fond B2 `#2E3440` (identique au reste du cadre), texte F1
 ### 3.3 `term_prompt` (avant-dernière ligne)
 
 Composants, dans l'ordre : **heure de début de commande** (`HH:MM:SS`, capturée à
-l'affichage du prompt), `user@host`, chemin **absolu**, numéro d'historique entre
-parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), charset.
+l'affichage du prompt), **numéro d'historique** entre parenthèses (italique),
+`user@host`, chemin **absolu**, invite (flèche grasse). Le suffixe est cadré à
+**gauche** sur sa largeur normalisée, de sorte qu'il colle au chemin (un seul
+espace) sans décaler le curseur.
 
 - **Fond commun au cadre** : la couleur de fond par défaut du terminal est fixée
   à celle des trois lignes (via `OSC 11`, rétablie à la sortie par `OSC 110`) ;
@@ -154,8 +156,9 @@ parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), ch
   l'effacement de fin de ligne, de sorte que cet effacement se fait sur le fond
   par défaut et ne surligne pas le reste de la ligne.
 - **Accent du prompt** : `user@host` et le suffixe sont colorés par
-  `PROMPT_FG` (l'accent), sur le fond de la palette. Le chemin (bleu), l'heure
-  et l'historique gardent leurs rôles de couleurs, éclaircies sous `wheel`
+  `PROMPT_FG` (l'accent), sur le fond de la palette. L'heure, le numéro
+  d'historique et le chemin gardent leurs rôles de couleurs, choisies
+  **saturées** pour rester lisibles malgré l'éclaircissement sous `wheel`
   (voir §5).
 - **Mode capture** : le masquage de la zone centrale remplace le nom d'hôte par
   des `#` **à longueur constante**, ce qui préserve la mise en forme de la ligne
@@ -231,8 +234,9 @@ Un thème décrit le **suffixe** affiché et les couleurs. Trois thèmes fournis
 | `wheel`    | `>>>>`  | violet |
 | `root`     | `###>`  | rouge, **reverse** |
 
-- Largeur de suffixe **normalisée** : champ de **6 colonnes** (les suffixes sont
-  complétés/paddés pour ne pas décaler le curseur).
+- Largeur de suffixe **normalisée** : champ de **6 colonnes**, cadré à
+  **gauche** (remplissage en fin) pour rapprocher le suffixe du chemin, la
+  largeur restant constante pour ne pas décaler le curseur.
 - **Bascule automatique** vers `root` si un token `sudo`, `doas`, `su` ou
   `sudoedit` apparaît **n'importe où** dans la ligne — y compris dans une
   **commande composée** (`sudo apt && reboot`, `echo $(sudo x)`…). La détection
@@ -252,12 +256,14 @@ Couleurs par défaut (surchargeables via `~/.opshellrc`) :
 |---------|---------|------|
 | `term_stat` | F1 `#E6EDF3` gras | B1 `#2E3440` |
 | `term_context` | F1 `#E6EDF3` gras | B2 `#2E3440` |
-| utilisateur | F2 `#A6E3A1` | B1 |
-| chemin | F3 `#89B4FA` | transparent |
-| historique | F5 `#6C7086` italique | transparent |
-| heure | F6 `#8BA1B9` italique | transparent |
-| accent (flèche, suffixe, `user@host`) | F7 `#A6E3A1` | transparent |
+| accent (flèche, suffixe, `user@host`) | F7 `#8AE68F` gras | B1 |
+| chemin | F3 `#6EA8FF` | transparent |
+| historique | F5 `#A6B0CC` italique | transparent |
+| heure | F6 `#7EB0DE` italique | transparent |
 | charset | F8 `#FAB387` | transparent |
+
+Ces couleurs de prompt sont volontairement **saturées** pour conserver du
+contraste sur fond sombre, y compris après l'éclaircissement `wheel`.
 
 La **personnalisation des couleurs** (via `~/.opshellrc`) ne s'applique qu'aux
 zones `term_stat`, `term_context` et au prompt, et seulement pour les thèmes
@@ -265,13 +271,15 @@ zones `term_stat`, `term_context` et au prompt, et seulement pour les thèmes
 
 - `classique` : choix utilisateur rendu **tel quel** ;
 - `wheel` : les couleurs du `classique` (personnalisées ou par défaut) sont
-  **toujours éclaircies d'environ 30 % vers le blanc**, prompt compris ;
+  **toujours éclaircies vers le blanc** : **30 %** pour les textes, **20 %**
+  seulement pour les **fonds** (`STAT_BG`, `CONTEXT_BG`, `PROMPT_BG`), afin de
+  resserrer l'écart de fond avec `classique` ;
 - `root` : **figé** — aucune personnalisation n'est appliquée.
 
 Les six clés (`STAT_FG`, `STAT_BG`, `CONTEXT_FG`, `CONTEXT_BG`, `PROMPT_FG`,
 `PROMPT_BG`) s'écrivent en `#RRGGBB` et valent par défaut `classique` :
 `STAT_FG/CONTEXT_FG` = F1, `STAT_BG/CONTEXT_BG` = B1/B2, `PROMPT_FG` = accent
-(vert `#A6E3A1`), `PROMPT_BG` = B1. Voir §10 pour le sélecteur.
+(vert `#8AE68F`), `PROMPT_BG` = B1. Voir §10 pour le sélecteur.
 
 ## 6. Options et aide contextuelle
 
@@ -377,10 +385,11 @@ sous `wheel` (voir §5).
 ratatui : navigation `↑/↓`, édition `Entrée`, annulation `Échap` d'un champ,
 `F2` ou `Échap` en liste = **enregistrer et quitter**). Les champs de couleur
 affichent un **échantillon réel** et ouvrent un **sélecteur** sur `Entrée` :
-grille de couleurs curatées + entrée **défaut** (rendu original du thème),
-navigation aux flèches, `Entrée` valide, `Échap` annule. `--reload-rc` relit
-`~/.opshellrc` et affiche le résumé de la configuration active **sans** ouvrir
-l'interface (pratique après édition manuelle ou en non-tty). La règle « ne
+grille **8×8** (entrée « défaut » en première case, puis 63 couleurs couvrant
+les **extrêmes** — noir `#000000` et blanc `#FFFFFF` purs — et 11 teintes × 5
+nuances), navigation aux flèches, `Entrée` valide, `Échap` annule. `--reload-rc`
+relit `~/.opshellrc` et affiche le résumé de la configuration active **sans**
+ouvrir l'interface (pratique après édition manuelle ou en non-tty). La règle « ne
 jamais éditer un fichier déployé à la main » s'applique aussi aux rc.
 
 ## 11. Architecture du code
@@ -429,13 +438,20 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
 - **Binaires pré-compilés** : aucune chaîne de compilation sur la cible
   (indispensable DSM 7.2 / SRM).
 - **Installateurs noarch** : `build/install.sh` (Unix) et `build/install.ps1`
-  (Windows) détectent OS/arch, téléchargent l'archive, vérifient le **SHA256**,
-  installent puis lancent `bashop install`.
-- **Index JSON** (`build/index.sh` → `dist/index.json`) : associe `os`/`arch` à
-  une `url` et un `sha256`.
-- **Cibles** : `linux x86_64`, `linux aarch64`/`armv7`, `freebsd x86_64`/
-  `armv7`, `windows x86_64`. Binaires Linux **statiques (musl)** quand possible
-  (DSM/SRM).
+  (Windows) détectent OS/arch, **sélectionnent** l'archive correspondante dans
+  l'index (os/arch + variante), vérifient le **SHA256**, installent puis lancent
+  `bashop install`. Sur Synology (DSM), la variante statique `musl` est
+  préférée automatiquement ; `VARIANTE` force un choix, `VERSION` épingle une
+  version.
+- **Index JSON** (`build/index.sh` → `dist/index.json`) : chaque entrée associe
+  `os`/`arch`/`version`/**`variante`** à une `url` et un `sha256`.
+- **Nomenclature des archives** :
+  `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (ex.
+  `bashop-0.5.1-linux-x86_64-musl.tar.gz`).
+- **Cibles** : `linux x86_64` (Ubuntu, glibc), `linux x86_64-musl` (statique,
+  DSM/SRM), `freebsd x86_64` (compatible CURRENT et STABLE, lié à `libc.so.7`),
+  `linux aarch64`/`armv7`, `freebsd armv7`, `windows x86_64`.
+- Compilation croisée via `cargo zigbuild` (zig) pour les cibles non natives.
 - Compilation locale = option de **développement** uniquement.
 
 ## 13. Jalons
