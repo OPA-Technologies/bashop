@@ -5,6 +5,7 @@
 //! ligne vide ou commençant par `#` est ignorée ; les clés inconnues sont
 //! conservées dans `inconnues` pour ne rien perdre à la réécriture.
 
+use crate::theme::{Rgb, Surcharge};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -20,6 +21,8 @@ pub const NOTIFICATION_DEFAUT: bool = true;
 pub const SEUIL_NOTIFICATION_DEFAUT: u64 = 5;
 /// Horodatage des commandes désactivé par défaut.
 pub const HORODATAGE_DEFAUT: bool = false;
+/// Ajout d'une ligne vide après chaque commande actif par défaut.
+pub const LIGNE_VIDE_DEFAUT: bool = true;
 
 /// Configuration utilisateur.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +42,10 @@ pub struct Config
     pub seuil_notification: u64,
     /// Horodatage des commandes dans `term_context`.
     pub horodatage: bool,
+    /// Ajout d'une ligne vide après chaque commande (lisibilité).
+    pub ligne_vide: bool,
+    /// Couleurs personnalisées des zones du cadre et du prompt.
+    pub couleurs: Surcharge,
     /// Clés non reconnues, conservées telles quelles.
     pub inconnues: BTreeMap<String, String>,
   }
@@ -55,6 +62,8 @@ impl Default for Config
           notification: NOTIFICATION_DEFAUT,
           seuil_notification: SEUIL_NOTIFICATION_DEFAUT,
           horodatage: HORODATAGE_DEFAUT,
+          ligne_vide: LIGNE_VIDE_DEFAUT,
+          couleurs: Surcharge::default(),
           inconnues: BTreeMap::new(),
         }
       }
@@ -85,6 +94,34 @@ fn lire_bool(valeur: &str) -> Option<bool>
       }
   }
 
+/// Interprète une couleur `#RRGGBB` (dièse facultatif, forme courte `#RGB`).
+/// Renvoie `None` si la chaîne n'est pas une couleur valide.
+pub fn parse_couleur(valeur: &str) -> Option<Rgb>
+  {
+    let brut = valeur.trim();
+    let v = brut.strip_prefix('#').unwrap_or(brut);
+    if !v.is_ascii()
+      {
+        return None;
+      }
+    let octet = |s: &str| u8::from_str_radix(s, 16).ok();
+    match v.len()
+      {
+        6 => Some(Rgb::new(octet(&v[0..2])?, octet(&v[2..4])?, octet(&v[4..6])?)),
+        3 => {
+          let doublet = |s: &str| octet(&format!("{s}{s}"));
+          Some(Rgb::new(doublet(&v[0..1])?, doublet(&v[1..2])?, doublet(&v[2..3])?))
+        }
+        _ => None,
+      }
+  }
+
+/// Formate une couleur RVB en `#RRGGBB`.
+pub fn format_couleur(couleur: Rgb) -> String
+  {
+    format!("#{:02X}{:02X}{:02X}", couleur.r, couleur.g, couleur.b)
+  }
+
 /// Récrit `~/.opshellrc` avec la valeur de `CAPTURE` demandée, en préservant
 /// toutes les autres lignes (commentaires, clés inconnues, autres réglages).
 pub fn fixer_capture(actif: bool) -> std::io::Result<()>
@@ -108,6 +145,31 @@ pub fn assembler(config: &Config) -> String
     lignes.push(format!("NOTIFICATION={}", if config.notification { "on" } else { "off" }));
     lignes.push(format!("NOTIFICATION_SEUIL={}", config.seuil_notification.max(1)));
     lignes.push(format!("HORODATAGE={}", if config.horodatage { "on" } else { "off" }));
+    lignes.push(format!("LIGNE_VIDE={}", if config.ligne_vide { "on" } else { "off" }));
+    if let Some(c) = config.couleurs.stat_fg
+      {
+        lignes.push(format!("STAT_FG={}", format_couleur(c)));
+      }
+    if let Some(c) = config.couleurs.stat_bg
+      {
+        lignes.push(format!("STAT_BG={}", format_couleur(c)));
+      }
+    if let Some(c) = config.couleurs.contexte_fg
+      {
+        lignes.push(format!("CONTEXT_FG={}", format_couleur(c)));
+      }
+    if let Some(c) = config.couleurs.contexte_bg
+      {
+        lignes.push(format!("CONTEXT_BG={}", format_couleur(c)));
+      }
+    if let Some(c) = config.couleurs.prompt_fg
+      {
+        lignes.push(format!("PROMPT_FG={}", format_couleur(c)));
+      }
+    if let Some(c) = config.couleurs.prompt_bg
+      {
+        lignes.push(format!("PROMPT_BG={}", format_couleur(c)));
+      }
     for (cle, valeur) in &config.inconnues
       {
         lignes.push(format!("{cle}={valeur}"));
@@ -218,6 +280,18 @@ pub fn analyser(contenu: &str) -> Config
                   config.horodatage = actif;
                 }
             }
+            "LIGNE_VIDE" | "BLANK_LINE" => {
+              if let Some(actif) = lire_bool(valeur)
+                {
+                  config.ligne_vide = actif;
+                }
+            }
+            "STAT_FG" => config.couleurs.stat_fg = parse_couleur(valeur),
+            "STAT_BG" => config.couleurs.stat_bg = parse_couleur(valeur),
+            "CONTEXT_FG" | "CONTEXTE_FG" => config.couleurs.contexte_fg = parse_couleur(valeur),
+            "CONTEXT_BG" | "CONTEXTE_BG" => config.couleurs.contexte_bg = parse_couleur(valeur),
+            "PROMPT_FG" => config.couleurs.prompt_fg = parse_couleur(valeur),
+            "PROMPT_BG" => config.couleurs.prompt_bg = parse_couleur(valeur),
             _ => {
               config.inconnues.insert(cle, valeur.to_string());
             }
@@ -329,7 +403,49 @@ mod tests
         assert_eq!(lignes[4], "NOTIFICATION=off");
         assert_eq!(lignes[5], "NOTIFICATION_SEUIL=9");
         assert_eq!(lignes[6], "HORODATAGE=on");
-        assert_eq!(lignes.len(), 7, "aucune clé en double, pas de ligne vide");
+        assert_eq!(lignes[7], "LIGNE_VIDE=on");
+        assert_eq!(lignes.len(), 8, "aucune clé en double, pas de ligne vide");
+      }
+
+    #[test]
+    fn une_couleur_hex_est_lue_et_ecrite_de_facon_symetrique()
+      {
+        assert_eq!(parse_couleur("#112233"), Some(Rgb::new(0x11, 0x22, 0x33)));
+        assert_eq!(parse_couleur("112233"), Some(Rgb::new(0x11, 0x22, 0x33)));
+        assert_eq!(parse_couleur("#abc"), Some(Rgb::new(0xAA, 0xBB, 0xCC)));
+        assert_eq!(format_couleur(Rgb::new(0x11, 0x22, 0x33)), "#112233");
+      }
+
+    #[test]
+    fn une_couleur_invalide_est_ignoree()
+      {
+        assert_eq!(parse_couleur("xyz"), None);
+        assert_eq!(parse_couleur("#12345"), None);
+        assert_eq!(parse_couleur("#gggggg"), None);
+        assert_eq!(parse_couleur(""), None);
+      }
+
+    #[test]
+    fn les_couleurs_et_la_ligne_vide_sont_lues()
+      {
+        let c = analyser("LIGNE_VIDE=off\nSTAT_FG=#FFFFFF\nPROMPT_BG=#102030\nSTAT_BG=nope\n");
+        assert!(!c.ligne_vide);
+        assert_eq!(c.couleurs.stat_fg, Some(Rgb::new(0xFF, 0xFF, 0xFF)));
+        assert_eq!(c.couleurs.prompt_bg, Some(Rgb::new(0x10, 0x20, 0x30)));
+        assert_eq!(c.couleurs.stat_bg, None, "une valeur invalide retombe au défaut");
+      }
+
+    #[test]
+    fn les_couleurs_definies_sont_ecrites_dans_l_ordre()
+      {
+        let mut c = Config::default();
+        c.couleurs.prompt_bg = Some(Rgb::new(0x10, 0x20, 0x30));
+        c.couleurs.stat_fg = Some(Rgb::new(0xAA, 0xBB, 0xCC));
+        let contenu = assembler(&c);
+        let lignes: Vec<&str> = contenu.lines().collect();
+        assert_eq!(lignes[7], "LIGNE_VIDE=on");
+        assert_eq!(lignes[8], "STAT_FG=#AABBCC");
+        assert!(lignes.contains(&"PROMPT_BG=#102030"));
       }
 
     #[test]

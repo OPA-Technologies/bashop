@@ -5,7 +5,7 @@
 //! applique les couleurs du thème. Le mode mono-ligne est forcé ici.
 
 use crate::shells::Shell;
-use crate::theme::Theme;
+use crate::theme::Palette;
 
 /// Marqueur de début de prompt (OSC 133;A).
 const OSC_PROMPT: &str = "\\e]133;A\\e\\\\";
@@ -71,9 +71,6 @@ const REINIT_ATTR: &str = "\\e[39m\\e[22m\\e[23m";
 const REINIT_ZSH: &str = "%{\\e[0m%}";
 /// Réinitialisation zsh sans toucher au fond.
 const REINIT_ATTR_ZSH: &str = "%{\\e[39m\\e[22m\\e[23m%}";
-const COULEUR_CHEMIN: (u8, u8, u8) = (0x89, 0xB4, 0xFA);
-const COULEUR_HISTORIQUE: (u8, u8, u8) = (0x93, 0x99, 0xB2);
-const COULEUR_HEURE: (u8, u8, u8) = (0x8B, 0xA1, 0xB9);
 /// Épingle le prompt sur la dernière ligne de la zone du shell (avant-dernière
 /// ligne de l'écran) puis efface la fin de ligne.
 const PIN: &str = "\\e[${LINES};1H\\e[K";
@@ -81,9 +78,9 @@ const PIN: &str = "\\e[${LINES};1H\\e[K";
 const PIN_ZSH: &str = "%{\\e[${LINES};1H\\e[K%}";
 
 /// Cadre (cadrage à droite) du suffixe de prompt sur la largeur normalisée.
-pub fn suffixe_cadre(theme: &Theme, largeur: u16) -> String
+pub fn suffixe_cadre(glyphe: &str, largeur: u16) -> String
   {
-    format!("{:>largeur$}", theme.suffixe.glyphe, largeur = largeur as usize)
+    format!("{:>largeur$}", glyphe, largeur = largeur as usize)
   }
 
 /// Construit la chaîne `PS1` de bash pour un thème donné.
@@ -98,45 +95,43 @@ pub fn suffixe_cadre(theme: &Theme, largeur: u16) -> String
 /// seule l'invite est surlignée, jamais le reste de la ligne. Une
 /// réinitialisation complète précède `OSC 133;B`, donc la saisie de l'utilisateur
 /// garde le fond par défaut.
-pub fn prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn prompt_bash(palette: &Palette, glyphe: &str, largeur_suffixe: u16) -> String
   {
-    let accent = (theme.accent.r, theme.accent.g, theme.accent.b);
-    let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
-    let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
+    let accent = palette.prompt_fg.tuple();
+    let fond = palette.prompt_bg.tuple();
     format!(
       "\\[{reinit}\\]\\[{pin}\\]\\[{fond}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe} \\[{reinit}\\]\\[{osc_commande}\\]",
       fond = fond_sgr(fond),
       pin = PIN,
       osc_prompt = OSC_PROMPT,
-      heure = couleur_italique(COULEUR_HEURE, fond),
+      heure = couleur_italique(palette.prompt_heure.tuple(), fond),
       ra = REINIT_ATTR,
       user = couleur(accent, true, fond),
-      chemin = couleur(COULEUR_CHEMIN, false, fond),
-      hist = couleur_italique(COULEUR_HISTORIQUE, fond),
-      suffixe_col = couleur(suffixe, true, fond),
-      suffixe = suffixe_cadre(theme, largeur_suffixe),
+      chemin = couleur(palette.prompt_chemin.tuple(), false, fond),
+      hist = couleur_italique(palette.prompt_historique.tuple(), fond),
+      suffixe_col = couleur(accent, true, fond),
+      suffixe = suffixe_cadre(glyphe, largeur_suffixe),
       reinit = REINIT,
       osc_commande = OSC_COMMANDE,
     )
   }
 
 /// Construit la chaîne `PROMPT` de zsh pour un thème donné.
-pub fn prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn prompt_zsh(palette: &Palette, glyphe: &str, largeur_suffixe: u16) -> String
   {
-    let accent = (theme.accent.r, theme.accent.g, theme.accent.b);
-    let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
-    let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
+    let accent = palette.prompt_fg.tuple();
+    let fond = palette.prompt_bg.tuple();
     format!(
       "{reinit}{pin}{fond}{heure}${{__BASHOP_HEURE}}{ra} {user}%n@%m{ra} {chemin}/{ra} {hist}${{__BASHOP_HIST}}{ra} {suf}{suffixe} {reinit}",
       fond = fond_zsh(fond),
       pin = PIN_ZSH,
-      heure = couleur_italique_zsh(COULEUR_HEURE, fond),
+      heure = couleur_italique_zsh(palette.prompt_heure.tuple(), fond),
       ra = REINIT_ATTR_ZSH,
       user = couleur_zsh(accent, true, fond),
-      chemin = couleur_zsh(COULEUR_CHEMIN, false, fond),
-      hist = couleur_italique_zsh(COULEUR_HISTORIQUE, fond),
-      suf = couleur_zsh(suffixe, true, fond),
-      suffixe = suffixe_cadre(theme, largeur_suffixe),
+      chemin = couleur_zsh(palette.prompt_chemin.tuple(), false, fond),
+      hist = couleur_italique_zsh(palette.prompt_historique.tuple(), fond),
+      suf = couleur_zsh(accent, true, fond),
+      suffixe = suffixe_cadre(glyphe, largeur_suffixe),
       reinit = REINIT_ZSH,
     )
   }
@@ -190,14 +185,31 @@ if [ -f /etc/bashrc ]; then . /etc/bashrc; fi\n\
 if [ -f \"${HOME}/.bashrc\" ]; then . \"${HOME}/.bashrc\"; fi\n\
 unset __bashop_profil\n";
 
+/// Bloc inséré dans `precmd` pour ajouter une ligne vide entre les commandes.
+///
+/// La toute première invite ne reçoit pas de ligne vide : un témoin
+/// `__bashop_vide` n'est posé qu'après le premier `precmd`.
+fn bloc_ligne_vide(ligne_vide: bool) -> &'static str
+  {
+    if ligne_vide
+      {
+        "  if [ -n \"${__bashop_vide:-}\" ]\n  then\n    printf '\\n'\n  fi\n  __bashop_vide=1\n"
+      }
+    else
+      {
+        ""
+      }
+  }
+
 /// Corps de démarrage bash : `precmd` (heure, historique, statut, privilège),
 /// `PROMPT_COMMAND` et `PS1`. Ne lit **pas** les profils : c'est la partie
 /// commune au rc généré (`--rcfile`) et à la commande `bashop prompt`.
-pub fn script_prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn script_prompt_bash(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
   {
     let mut rc = String::new();
     rc.push_str("__bashop_precmd()\n{\n");
     rc.push_str("  local s=$?\n");
+    rc.push_str(bloc_ligne_vide(ligne_vide));
     rc.push_str("  __BASHOP_HEURE=$(date +%H:%M:%S)\n");
     rc.push_str("  __BASHOP_HIST=$(printf '(%3d)' \"${HISTCMD:-0}\")\n");
     rc.push_str("  printf '\\033]133;D;%s\\007' \"$s\"\n");
@@ -206,18 +218,19 @@ pub fn script_prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
     rc.push_str("}\n");
     rc.push_str("PROMPT_COMMAND=\"__bashop_precmd${PROMPT_COMMAND:+; ${PROMPT_COMMAND//__bashop_osc/}}\"\n");
     rc.push_str("bind 'set horizontal-scroll-mode on'\n");
-    rc.push_str(&format!("PS1='{}'\n", prompt_bash(theme, largeur_suffixe)));
+    rc.push_str(&format!("PS1='{}'\n", prompt_bash(palette, glyphe, largeur_suffixe)));
     rc
   }
 
 /// Corps de démarrage zsh : `precmd` (heure, historique, statut, privilège) et
 /// `PROMPT`. Ne lit **pas** `~/.zshrc` : partie commune au `.zshrc` généré et à
 /// `bashop prompt`.
-pub fn script_prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn script_prompt_zsh(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
   {
     let mut rc = String::new();
     rc.push_str("__bashop_precmd()\n{\n");
     rc.push_str("  local s=$?\n");
+    rc.push_str(bloc_ligne_vide(ligne_vide));
     rc.push_str("  __BASHOP_HEURE=$(date +%H:%M:%S)\n");
     rc.push_str("  __BASHOP_HIST=$(printf '(%3d)' \"${HISTCMD:-0}\")\n");
     rc.push_str("  printf '\\033]133;D;%s\\007' \"$s\"\n");
@@ -226,28 +239,28 @@ pub fn script_prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
     rc.push_str("}\n");
     rc.push_str("typeset -ga precmd_functions\n");
     rc.push_str("precmd_functions+=(__bashop_precmd)\n");
-    rc.push_str(&format!("PROMPT='{}'\n", prompt_zsh(theme, largeur_suffixe)));
+    rc.push_str(&format!("PROMPT='{}'\n", prompt_zsh(palette, glyphe, largeur_suffixe)));
     rc
   }
 
 /// Contenu du fichier de démarrage de bash (`--rcfile`).
-pub fn rc_bash(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn rc_bash(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
   {
     let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
     rc.push_str(ENTETE_BASH);
     rc.push_str("shopt -s checkwinsize\n");
-    rc.push_str(&script_prompt_bash(theme, largeur_suffixe));
+    rc.push_str(&script_prompt_bash(palette, glyphe, largeur_suffixe, ligne_vide));
     rc
   }
 
 /// Contenu du `.zshrc` de démarrage de zsh (via `ZDOTDIR`).
-pub fn zshrc_zsh(theme: &Theme, largeur_suffixe: u16) -> String
+pub fn zshrc_zsh(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
   {
     let mut rc = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
     rc.push_str("setopt prompt_subst\n");
     rc.push_str("setopt singlelinezle\n");
     rc.push_str("if [ -f \"${HOME}/.zshrc\" ]; then source \"${HOME}/.zshrc\"; fi\n");
-    rc.push_str(&script_prompt_zsh(theme, largeur_suffixe));
+    rc.push_str(&script_prompt_zsh(palette, glyphe, largeur_suffixe, ligne_vide));
     rc
   }
 
@@ -327,18 +340,23 @@ pub fn supporte(shell: Shell) -> bool
 mod tests
   {
     use super::*;
-    use crate::theme::CLASSIQUE;
+    use crate::theme::Surcharge;
+
+    fn p() -> Palette
+      {
+        crate::theme::palette(&crate::theme::CLASSIQUE, &Surcharge::default())
+      }
 
     #[test]
     fn le_suffixe_est_cadre_sur_la_largeur()
       {
-        assert_eq!(suffixe_cadre(&CLASSIQUE, 6), "    >>");
+        assert_eq!(suffixe_cadre(">>", 6), "    >>");
       }
 
     #[test]
     fn le_prompt_bash_publie_les_marqueurs_osc()
       {
-        let prompt = prompt_bash(&CLASSIQUE, 6);
+        let prompt = prompt_bash(&p(), ">>", 6);
         assert!(prompt.contains("133;A"));
         assert!(prompt.contains("133;B"));
         assert!(prompt.contains(">>"));
@@ -347,7 +365,7 @@ mod tests
     #[test]
     fn le_prompt_bash_affiche_user_at_host_le_chemin_absolu_et_le_numero()
       {
-        let prompt = prompt_bash(&CLASSIQUE, 6);
+        let prompt = prompt_bash(&p(), ">>", 6);
         assert!(prompt.contains("\\u@\\h"), "user@host absent : {prompt}");
         assert!(prompt.contains("${PWD}"), "chemin absolu absent : {prompt}");
         assert!(prompt.contains("${__BASHOP_HIST}"), "numéro absent : {prompt}");
@@ -356,7 +374,7 @@ mod tests
     #[test]
     fn le_prompt_porte_l_heure_en_premiere_position()
       {
-        let prompt = prompt_bash(&CLASSIQUE, 6);
+        let prompt = prompt_bash(&p(), ">>", 6);
         let heure = prompt.find("${__BASHOP_HEURE}");
         let identite = prompt.find("\\u@\\h");
         assert!(heure.is_some(), "heure absente : {prompt}");
@@ -367,29 +385,40 @@ mod tests
     #[test]
     fn le_prompt_est_epingle_sur_la_derniere_ligne()
       {
-        assert!(prompt_bash(&CLASSIQUE, 6).contains("${LINES};1H"));
-        assert!(prompt_zsh(&CLASSIQUE, 6).contains("${LINES};1H"));
+        assert!(prompt_bash(&p(), ">>", 6).contains("${LINES};1H"));
+        assert!(prompt_zsh(&p(), ">>", 6).contains("${LINES};1H"));
       }
 
     #[test]
     fn le_prefixe_du_prompt_porte_le_fond_du_cadre()
       {
-        let fond = format!("48;2;{};{};{}", CLASSIQUE.fond.r, CLASSIQUE.fond.g, CLASSIQUE.fond.b);
-        let bash = prompt_bash(&CLASSIQUE, 6);
+        let palette = p();
+        let fond = format!("48;2;{};{};{}", palette.prompt_bg.r, palette.prompt_bg.g, palette.prompt_bg.b);
+        let bash = prompt_bash(&palette, ">>", 6);
         assert!(bash.contains(&fond), "fond du cadre absent : {bash}");
-        let zsh = prompt_zsh(&CLASSIQUE, 6);
+        let zsh = prompt_zsh(&palette, ">>", 6);
         assert!(zsh.contains(&fond), "fond du cadre absent (zsh) : {zsh}");
+      }
+
+    #[test]
+    fn le_prompt_emploie_l_accent_personnalise()
+      {
+        let surcharge = Surcharge { prompt_fg: Some(crate::theme::Rgb::new(0x12, 0x34, 0x56)), ..Surcharge::default() };
+        let palette = crate::theme::palette(&crate::theme::CLASSIQUE, &surcharge);
+        let prompt = prompt_bash(&palette, ">>", 6);
+        assert!(prompt.contains("38;2;18;52;86"), "accent personnalisé absent : {prompt}");
       }
 
     #[test]
     fn l_effacement_de_ligne_reste_sur_le_fond_par_defaut()
       {
-        let fond = format!("48;2;{};{};{}", CLASSIQUE.fond.r, CLASSIQUE.fond.g, CLASSIQUE.fond.b);
-        let bash = prompt_bash(&CLASSIQUE, 6);
+        let palette = p();
+        let fond = format!("48;2;{};{};{}", palette.prompt_bg.r, palette.prompt_bg.g, palette.prompt_bg.b);
+        let bash = prompt_bash(&palette, ">>", 6);
         let pin = bash.find("LINES};1H").expect("épinglage");
         let fond_pos = bash.find(&fond).expect("fond du cadre");
         assert!(pin < fond_pos, "le fond doit être posé après l'effacement : {bash}");
-        let zsh = prompt_zsh(&CLASSIQUE, 6);
+        let zsh = prompt_zsh(&palette, ">>", 6);
         let pin = zsh.find("LINES};1H").expect("épinglage (zsh)");
         let fond_pos = zsh.find(&fond).expect("fond du cadre (zsh)");
         assert!(pin < fond_pos, "le fond doit être posé après l'effacement (zsh) : {zsh}");
@@ -398,7 +427,7 @@ mod tests
     #[test]
     fn le_prompt_reinitialise_le_fond_avant_la_saisie()
       {
-        let bash = prompt_bash(&CLASSIQUE, 6);
+        let bash = prompt_bash(&p(), ">>", 6);
         let commande = bash.find("133;B").expect("marqueur de commande");
         let suffixe = bash.find(">>").expect("suffixe");
         let reset = bash[..commande].rfind("\\e[0m").expect("reset avant la commande");
@@ -408,7 +437,7 @@ mod tests
     #[test]
     fn le_rc_bash_force_le_mode_mono_ligne_par_prompt()
       {
-        let rc = rc_bash(&CLASSIQUE, 6);
+        let rc = rc_bash(&p(), ">>", 6, true);
         assert!(rc.contains("PROMPT_COMMAND"));
         assert!(rc.contains("PS1="));
         assert!(rc.contains("__BASHOP_HIST"));
@@ -418,7 +447,7 @@ mod tests
     #[test]
     fn le_zshrc_active_prompt_subst()
       {
-        let rc = zshrc_zsh(&CLASSIQUE, 6);
+        let rc = zshrc_zsh(&p(), ">>", 6, true);
         assert!(rc.contains("prompt_subst"));
         assert!(rc.contains("singlelinezle"));
       }
@@ -426,18 +455,28 @@ mod tests
     #[test]
     fn les_rc_publient_le_privilege_par_osc_prive()
       {
-        assert!(rc_bash(&CLASSIQUE, 6).contains("1337;Bashop"));
-        assert!(zshrc_zsh(&CLASSIQUE, 6).contains("1337;Bashop"));
+        assert!(rc_bash(&p(), ">>", 6, true).contains("1337;Bashop"));
+        assert!(zshrc_zsh(&p(), ">>", 6, true).contains("1337;Bashop"));
       }
 
     #[test]
     fn le_rc_bash_source_les_profils_de_connexion_et_le_bashrc()
       {
-        let rc = rc_bash(&CLASSIQUE, 6);
+        let rc = rc_bash(&p(), ">>", 6, true);
         assert!(rc.contains("/etc/profile"));
         assert!(rc.contains(".bash_profile"));
         assert!(rc.contains("${HOME}/.bashrc"), "le .bashrc doit toujours être lu : {rc}");
         assert!(rc.contains("/etc/bash.bashrc"));
+      }
+
+    #[test]
+    fn la_ligne_vide_est_posee_apres_la_premiere_invite_seulement()
+      {
+        let avec = script_prompt_bash(&p(), ">>", 6, true);
+        assert!(avec.contains("__bashop_vide"), "témoin de ligne vide absent : {avec}");
+        assert!(avec.contains("printf '\\n'"), "saut de ligne absent : {avec}");
+        let sans = script_prompt_bash(&p(), ">>", 6, false);
+        assert!(!sans.contains("__bashop_vide"), "ligne vide désactivée attendue : {sans}");
       }
 
     #[test]
@@ -480,7 +519,7 @@ mod tests
     #[test]
     fn le_script_prompt_bash_contient_precmd_et_ps1()
       {
-        let script = script_prompt_bash(&CLASSIQUE, 6);
+        let script = script_prompt_bash(&p(), ">>", 6, true);
         assert!(script.contains("__bashop_precmd()"));
         assert!(script.contains("PROMPT_COMMAND"));
         assert!(script.contains("PS1="));
@@ -495,7 +534,7 @@ mod tests
     #[test]
     fn le_script_prompt_zsh_contient_precmd_et_prompt()
       {
-        let script = script_prompt_zsh(&CLASSIQUE, 6);
+        let script = script_prompt_zsh(&p(), ">>", 6, true);
         assert!(script.contains("__bashop_precmd()"));
         assert!(script.contains("precmd_functions"));
         assert!(script.contains("PROMPT="));

@@ -134,7 +134,7 @@ Barre pleine largeur à trois zones :
    rafraîchis toutes les **0,5 s**.
 
 Style par défaut : fond B2 `#2E3440` (identique au reste du cadre), texte F1
-`#E6EDF3`, gras.
+`#E6EDF3`, gras. Surchargeable avec `CONTEXT_FG`/`CONTEXT_BG` (voir §10).
 
 ### 3.3 `term_prompt` (avant-dernière ligne)
 
@@ -143,15 +143,20 @@ l'affichage du prompt), `user@host`, chemin **absolu**, numéro d'historique ent
 parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), charset.
 
 - **Fond commun au cadre** : la couleur de fond par défaut du terminal est fixée
-  à celle des trois lignes (`#2E3440`, via `OSC 11`, rétablie à la sortie par
-  `OSC 110`) ; le prompt partage donc le fond de `term_stat` et `term_context`.
-  Le **préfixe** du prompt (heure, `user@host`, chemin, numéro, suffixe) porte en
-  outre explicitement le fond du thème (comme `term_stat`/`term_context`,
-  couleurs conservées) et une **réinitialisation complète** précède la saisie :
-  seule l'invite est en surbrillance, le texte tapé par l'utilisateur garde le
-  fond par défaut. Le fond n'est posé qu'**après** l'effacement de fin de ligne,
-  de sorte que cet effacement se fait sur le fond par défaut et ne surligne pas
-  le reste de la ligne.
+  à celle des trois lignes (via `OSC 11`, rétablie à la sortie par `OSC 110`) ;
+  le prompt partage donc le fond de `term_stat` et `term_context`. Cette couleur
+  provient de la **palette de prompt** : `PROMPT_BG` personnalisé, sinon le fond
+  du thème. Le **préfixe** du prompt (heure, `user@host`, chemin, numéro,
+  suffixe) porte en outre explicitement le fond de la palette (comme
+  `term_stat`/`term_context`, couleurs conservées) et une **réinitialisation
+  complète** précède la saisie : seule l'invite est en surbrillance, le texte
+  tapé par l'utilisateur garde le fond par défaut. Le fond n'est posé qu'**après**
+  l'effacement de fin de ligne, de sorte que cet effacement se fait sur le fond
+  par défaut et ne surligne pas le reste de la ligne.
+- **Accent du prompt** : `user@host` et le suffixe sont colorés par
+  `PROMPT_FG` (l'accent), sur le fond de la palette. Le chemin (bleu), l'heure
+  et l'historique gardent leurs rôles de couleurs, éclaircies sous `wheel`
+  (voir §5).
 - **Mode capture** : le masquage de la zone centrale remplace le nom d'hôte par
   des `#` **à longueur constante**, ce qui préserve la mise en forme de la ligne
   (fond du prompt et couleurs des segments restent visibles, hôte masqué).
@@ -251,8 +256,22 @@ Couleurs par défaut (surchargeables via `~/.opshellrc`) :
 | chemin | F3 `#89B4FA` | transparent |
 | historique | F5 `#6C7086` italique | transparent |
 | heure | F6 `#8BA1B9` italique | transparent |
-| invite | vert foncé `#4E9A06` | transparent |
+| accent (flèche, suffixe, `user@host`) | F7 `#A6E3A1` | transparent |
 | charset | F8 `#FAB387` | transparent |
+
+La **personnalisation des couleurs** (via `~/.opshellrc`) ne s'applique qu'aux
+zones `term_stat`, `term_context` et au prompt, et seulement pour les thèmes
+`classique` et `wheel` :
+
+- `classique` : choix utilisateur rendu **tel quel** ;
+- `wheel` : les couleurs du `classique` (personnalisées ou par défaut) sont
+  **toujours éclaircies d'environ 40 % vers le blanc**, prompt compris ;
+- `root` : **figé** — aucune personnalisation n'est appliquée.
+
+Les six clés (`STAT_FG`, `STAT_BG`, `CONTEXT_FG`, `CONTEXT_BG`, `PROMPT_FG`,
+`PROMPT_BG`) s'écrivent en `#RRGGBB` et valent par défaut `classique` :
+`STAT_FG/CONTEXT_FG` = F1, `STAT_BG/CONTEXT_BG` = B1/B2, `PROMPT_FG` = accent
+(vert `#A6E3A1`), `PROMPT_BG` = B1. Voir §10 pour le sélecteur.
 
 ## 6. Options et aide contextuelle
 
@@ -265,6 +284,11 @@ commande, dans cet ordre de résolution :
 
 Contraintes : **cache borné** indexé `(commande, mtime)`, **thread non
 bloquant** (le prompt ne gèle jamais), suggestions disponibles hors-ligne.
+
+Dans une commande composée, l'aide (`F1`, `Ctrl+F1`) et les suggestions visent
+le **dernier segment** (partie après le dernier séparateur de haut niveau `|`,
+`;`, `&&` ou `&`), et non la première commande de la ligne : `find / … | wc` +
+`F1` documente `wc`.
 
 ## 7. Sécurité
 
@@ -338,10 +362,23 @@ Clés reconnues (extrait) :
 | `NOTIFICATION` | Notification de fin de commande longue `on`/`off` (défaut `on`). |
 | `NOTIFICATION_SEUIL` | Durée minimale en secondes (défaut `5`). |
 | `HORODATAGE` | Horodatage des commandes `on`/`off` (défaut `off`). |
+| `LIGNE_VIDE` | Ligne vide avant chaque nouvelle invite `on`/`off` (défaut `on`). |
+| `STAT_FG` / `STAT_BG` | Texte/fond de `term_stat` en `#RRGGBB` (vide = thème). |
+| `CONTEXT_FG` / `CONTEXT_BG` | Texte/fond de `term_context` en `#RRGGBB` (vide = thème). |
+| `PROMPT_FG` / `PROMPT_BG` | Accent/fond du prompt en `#RRGGBB` (vide = thème). |
+
+`LIGNE_VIDE` n'agit que sur le **prompt Bashop** : une ligne vide est imprimée
+avant chaque nouvelle invite, **sauf la toute première**, de sorte que le prompt
+quitte le bas du cadre après une commande (effet appliqué aux deux shells). 
+Les clés couleur sont **sans effet sur `root`** (figé) et rendues éclaircies
+sous `wheel` (voir §5).
 
 `bashop config` ouvre l'interface de configuration (formulaire op-tui sur
 ratatui : navigation `↑/↓`, édition `Entrée`, annulation `Échap` d'un champ,
-`F2` ou `Échap` en liste = **enregistrer et quitter**). `--reload-rc` relit
+`F2` ou `Échap` en liste = **enregistrer et quitter**). Les champs de couleur
+affichent un **échantillon réel** et ouvrent un **sélecteur** sur `Entrée` :
+grille de couleurs curatées + entrée **défaut** (rendu original du thème),
+navigation aux flèches, `Entrée` valide, `Échap` annule. `--reload-rc` relit
 `~/.opshellrc` et affiche le résumé de la configuration active **sans** ouvrir
 l'interface (pratique après édition manuelle ou en non-tty). La règle « ne
 jamais éditer un fichier déployé à la main » s'applique aussi aux rc.

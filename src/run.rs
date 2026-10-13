@@ -38,7 +38,7 @@ use crate::shells::Shell;
 use crate::term::{SourisMode, Terminal};
 use crate::term::grid::{Cellule, Couleur};
 use crate::term::overlay::{Nature, Overlay};
-use crate::theme::{self, Theme};
+use crate::theme::{self, Palette, Theme};
 
 /// Fichier de démarrage généré, à nettoyer en sortie.
 enum RcPrepare
@@ -61,6 +61,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       .and_then(Shell::par_nom)
       .unwrap_or_else(Shell::depuis_environnement);
     let theme = theme::resoudre(&config.theme, crate::detect::privilege());
+    let palette = theme::palette(&theme, &config.couleurs);
 
     let (largeur, hauteur) = crossterm::terminal::size().unwrap_or((100, 30));
     let lignes_shell = hauteur.saturating_sub(2).max(1);
@@ -74,7 +75,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       pixel_height: 0,
     })?;
 
-    let rc = preparer_rc(shell, &theme, config.suffix_width);
+    let rc = preparer_rc(shell, &palette, theme.suffixe.glyphe, config.suffix_width, config.ligne_vide);
     let mut commande = CommandBuilder::new(shell.programme());
     commande.env("TERM", "xterm-256color");
     commande.env("BASHOP_ACTIVE", "1");
@@ -145,7 +146,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       sortie,
       PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     );
-    write!(sortie, "{}{}", definir_fond(), DESACTIVER_DEFILEMENT_ALTERNE)?;
+    write!(sortie, "{}{}", definir_fond(palette.prompt_bg.tuple()), DESACTIVER_DEFILEMENT_ALTERNE)?;
     sortie.flush()?;
     let backend = CrosstermBackend::new(sortie);
     let mut terminal = RatTerminal::new(backend)?;
@@ -155,6 +156,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       term: Terminal::nouveau(colonnes, lignes_shell),
       config: config.clone(),
       theme,
+      palette,
       largeur,
       hauteur,
       recepteur,
@@ -205,9 +207,13 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
   }
 
 /// Séquence OSC 11 : fixe la couleur de fond par défaut du terminal (cadre).
-fn definir_fond() -> String
+///
+/// La couleur retenue est celle du **fond du prompt** : elle colore à la fois la
+/// bande du prompt (dont l'effacement de fin de ligne se fait sur le fond par
+/// défaut) et la zone centrale restée sans style explicite.
+fn definir_fond(fond: (u8, u8, u8)) -> String
   {
-    let (r, g, b) = crate::frame::FOND_CADRE;
+    let (r, g, b) = fond;
     format!("\x1b]11;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\")
   }
 
@@ -234,6 +240,7 @@ struct App
     term: Terminal,
     config: Config,
     theme: Theme,
+    palette: Palette,
     largeur: u16,
     hauteur: u16,
     recepteur: mpsc::Receiver<Vec<u8>>,
@@ -685,6 +692,7 @@ impl App
             if theme != self.theme
               {
                 self.theme = theme;
+                self.palette = theme::palette(&theme, &self.config.couleurs);
               }
           }
       }
@@ -855,7 +863,8 @@ impl App
           }
         let jeton = commande.split_whitespace().last().unwrap_or("");
         let prefixe_jeton = &commande[commande.len() - jeton.len()..];
-        let programme = commande.split_whitespace().next();
+        let segment = crate::lexer::segment_courant(&commande);
+        let programme = segment.split_whitespace().next();
 
         let mut candidats: Vec<String> = self.options_courantes();
         if let Some(programme) = programme
@@ -883,10 +892,10 @@ impl App
           {
             return Some((complet[prefixe_jeton.len()..].to_string(), complet));
           }
-        if let Some(suggestion) = self.meilleure_suggestion(&commande)
-          && suggestion.starts_with(&commande)
+        if let Some(suggestion) = self.meilleure_suggestion(segment)
+          && suggestion.starts_with(segment)
           {
-            return Some((suggestion[commande.len()..].to_string(), suggestion));
+            return Some((suggestion[segment.len()..].to_string(), suggestion));
           }
         None
       }
@@ -948,7 +957,8 @@ impl App
     fn options_courantes(&self) -> Vec<String>
       {
         let commande = self.term.commande_courante();
-        let mut jetons = commande.split_whitespace();
+        let segment = crate::lexer::segment_courant(&commande);
+        let mut jetons = segment.split_whitespace();
         let Some(programme) = jetons.next()
           else
             {
@@ -986,7 +996,7 @@ impl App
     fn aide_contextuelle(&mut self)
       {
         let commande = self.term.commande_courante();
-        let mot = commande.split_whitespace().next().unwrap_or("").to_string();
+        let mot = crate::lexer::programme_courant(&commande).unwrap_or("").to_string();
         if mot.is_empty()
           {
             self.overlay_decalage = 0;
@@ -1009,7 +1019,7 @@ impl App
     fn aide_man_courante(&mut self)
       {
         let commande = self.term.commande_courante();
-        let mot = commande.split_whitespace().next().unwrap_or("").to_string();
+        let mot = crate::lexer::programme_courant(&commande).unwrap_or("").to_string();
         if mot.is_empty()
           {
             self.overlay_decalage = 0;
@@ -1067,7 +1077,7 @@ impl App
           term: &self.term,
           config: &self.config,
           root: self.root_actif(),
-          fond: (self.theme.fond.r, self.theme.fond.g, self.theme.fond.b),
+          palette: self.palette,
           identite: self.identite_courante(),
           options: self.options_courantes(),
           ghost: ghost.unwrap_or_default().chars().collect(),
@@ -1089,7 +1099,7 @@ struct Vue<'a>
     term: &'a Terminal,
     config: &'a Config,
     root: bool,
-    fond: (u8, u8, u8),
+    palette: Palette,
     identite: String,
     options: Vec<String>,
     ghost: Vec<char>,
@@ -1116,8 +1126,8 @@ impl Vue<'_>
 
         let stat_texte = stat::contenu(largeur, &self.identite, self.config.capture);
         let stat_style = Style::default()
-          .fg(couleur_tuple(stat::TEXTE))
-          .bg(couleur_tuple(self.fond))
+          .fg(couleur_tuple(self.palette.stat_fg.tuple()))
+          .bg(couleur_tuple(self.palette.stat_bg.tuple()))
           .add_modifier(Modifier::BOLD);
         cadre.render_widget(
           Paragraph::new(Line::from(Span::styled(stat_texte, stat_style))),
@@ -1137,7 +1147,7 @@ impl Vue<'_>
           derniere_erreur: self.term.derniere_erreur.clone(),
         };
         cadre.render_widget(
-          Paragraph::new(ligne_contexte(&contexte, largeur, self.fond)),
+          Paragraph::new(ligne_contexte(&contexte, largeur, self.palette.contexte_fg.tuple(), self.palette.contexte_bg.tuple())),
           Rect { x: 0, y: hauteur - 1, width: largeur, height: 1 },
         );
 
@@ -1241,7 +1251,7 @@ fn couleur_tuple(rgb: (u8, u8, u8)) -> Color
   }
 
 /// Compose la ligne de contexte sur toute la largeur (gauche / centre / droite).
-fn ligne_contexte(contexte: &context::Contexte, largeur: u16, fond: (u8, u8, u8)) -> Line<'static>
+fn ligne_contexte(contexte: &context::Contexte, largeur: u16, texte: (u8, u8, u8), fond: (u8, u8, u8)) -> Line<'static>
   {
     let largeur = largeur as usize;
     if largeur == 0
@@ -1249,7 +1259,7 @@ fn ligne_contexte(contexte: &context::Contexte, largeur: u16, fond: (u8, u8, u8)
         return Line::default();
       }
     let base = Style::default()
-      .fg(couleur_tuple(context::TEXTE))
+      .fg(couleur_tuple(texte))
       .bg(couleur_tuple(fond))
       .add_modifier(Modifier::BOLD);
     let style_centre = Style::default()
@@ -1846,7 +1856,7 @@ fn proteger(_chemin: &std::path::Path) {}
 
 /// Prépare le fichier de démarrage du shell (bash : `--rcfile`, zsh : `ZDOTDIR`)
 /// dans un répertoire privé propre au pid.
-fn preparer_rc(shell: Shell, theme: &Theme, largeur_suffixe: u16) -> Option<RcPrepare>
+fn preparer_rc(shell: Shell, palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> Option<RcPrepare>
   {
     let dossier = base_runtime().join(format!("bashop-{}", std::process::id()));
     std::fs::create_dir_all(&dossier).ok()?;
@@ -1855,14 +1865,14 @@ fn preparer_rc(shell: Shell, theme: &Theme, largeur_suffixe: u16) -> Option<RcPr
       {
         Shell::Bash => {
           let chemin = dossier.join("bashrc");
-          std::fs::write(&chemin, crate::bootstrap::rc_bash(theme, largeur_suffixe)).ok()?;
+          std::fs::write(&chemin, crate::bootstrap::rc_bash(palette, glyphe, largeur_suffixe, ligne_vide)).ok()?;
           Some(RcPrepare::Rcfile(chemin))
         }
         Shell::Zsh => {
           std::fs::write(dossier.join(".zshenv"), crate::bootstrap::zshenv_zsh()).ok()?;
           std::fs::write(dossier.join(".zprofile"), crate::bootstrap::zprofile_zsh()).ok()?;
           std::fs::write(dossier.join(".zlogin"), crate::bootstrap::zlogin_zsh()).ok()?;
-          std::fs::write(dossier.join(".zshrc"), crate::bootstrap::zshrc_zsh(theme, largeur_suffixe)).ok()?;
+          std::fs::write(dossier.join(".zshrc"), crate::bootstrap::zshrc_zsh(palette, glyphe, largeur_suffixe, ligne_vide)).ok()?;
           Some(RcPrepare::Zdotdir(dossier))
         }
         _ => None,
@@ -1921,7 +1931,7 @@ mod tests
           term: &term,
           config: &config,
           root: false,
-          fond: crate::frame::FOND_CADRE,
+          palette: theme::palette(&crate::theme::CLASSIQUE, &crate::theme::Surcharge::default()),
           identite: "test@hote".to_string(),
           options: vec!["--all".to_string()],
           ghost: Vec::new(),
@@ -1952,7 +1962,7 @@ mod tests
           term: &term,
           config: &config,
           root: false,
-          fond: crate::frame::FOND_CADRE,
+          palette: theme::palette(&crate::theme::CLASSIQUE, &crate::theme::Surcharge::default()),
           identite: "test@hote".to_string(),
           options: Vec::new(),
           ghost: Vec::new(),

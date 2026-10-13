@@ -1,28 +1,32 @@
 //! Interface de configuration — `bashop config`.
 //!
-//! Formulaire éditable des sept clés reconnues de `~/.opshellrc`, construit
-//! sur les primitives de `op-tui` (édition de ligne [`op_tui::edit::gerer`]) et
-//! rendu par ratatui. Chaque champ est validé à la sortie ; les clés inconnues
-//! du fichier sont conservées telles quelles.
+//! Formulaire éditable des clés reconnues de `~/.opshellrc`, construit sur les
+//! primitives de `op-tui` (édition de ligne [`op_tui::edit::gerer`]) et rendu
+//! par ratatui. Chaque champ est validé à la sortie ; les clés inconnues du
+//! fichier sont conservées telles quelles.
 //!
 //! Contrats :
 //! - `Échap` en liste quitte **et enregistre** ; `F2` enregistre aussi.
 //! - `Échap` dans un champ annule l'édition de ce champ ; `Entrée` la valide
 //!   et passe au champ suivant.
+//! - `Entrée` sur un champ de couleur ouvre le **sélecteur** : grille de couleurs
+//!   affichées en aplat, déplacement aux flèches, `Entrée` valide, `Échap` annule ;
+//!   l'entrée « défaut » rétablit la couleur du thème.
 //! - `bashop config --reload-rc` n'ouvre pas l'interface : il relit le fichier
 //!   et affiche le résumé de la configuration active.
 
-use crate::config::Config;
+use crate::config::{self, Config};
+use crate::theme::Rgb;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -40,6 +44,104 @@ pub struct Champ
     pub curseur: usize,
   }
 
+/// Clés de couleur, dans l'ordre d'affichage.
+const CLES_COULEUR: [&str; 6] =
+  ["STAT_FG", "STAT_BG", "CONTEXT_FG", "CONTEXT_BG", "PROMPT_FG", "PROMPT_BG"];
+
+/// Vrai si la clé désigne une couleur (champ piloté par le sélecteur).
+fn est_couleur(cle: &str) -> bool
+  {
+    CLES_COULEUR.contains(&cle)
+  }
+
+/// Couleurs proposées par le sélecteur. L'entrée « défaut » (index 0) est
+/// ajoutée séparément pour rétablir la couleur du thème.
+const PALETTE: &[Rgb] = &[
+  Rgb::new(0xFF, 0xFF, 0xFF),
+  Rgb::new(0xE6, 0xED, 0xF3),
+  Rgb::new(0xC0, 0xC8, 0xD4),
+  Rgb::new(0x93, 0xA1, 0xB2),
+  Rgb::new(0x6C, 0x70, 0x86),
+  Rgb::new(0x45, 0x47, 0x5A),
+  Rgb::new(0x2E, 0x34, 0x40),
+  Rgb::new(0x11, 0x11, 0x1B),
+  Rgb::new(0xFF, 0x6B, 0x6B),
+  Rgb::new(0xF3, 0x8B, 0xA8),
+  Rgb::new(0xEB, 0xA0, 0xAC),
+  Rgb::new(0xFA, 0xB3, 0x87),
+  Rgb::new(0xFF, 0xD1, 0x66),
+  Rgb::new(0xF9, 0xE2, 0xAF),
+  Rgb::new(0xA6, 0xE3, 0xA1),
+  Rgb::new(0x89, 0xD1, 0x85),
+  Rgb::new(0x4E, 0x9A, 0x06),
+  Rgb::new(0x94, 0xE2, 0xD5),
+  Rgb::new(0x2E, 0xCC, 0x71),
+  Rgb::new(0x1A, 0xBC, 0x9C),
+  Rgb::new(0x89, 0xB4, 0xFA),
+  Rgb::new(0x74, 0xC7, 0xEC),
+  Rgb::new(0x89, 0xDC, 0xEB),
+  Rgb::new(0x3B, 0x82, 0xF6),
+  Rgb::new(0x1E, 0x66, 0xF5),
+  Rgb::new(0x0E, 0xA5, 0xE9),
+  Rgb::new(0xCB, 0xA6, 0xF7),
+  Rgb::new(0xB4, 0xBE, 0xFE),
+  Rgb::new(0xF5, 0xC2, 0xE7),
+  Rgb::new(0xA8, 0x55, 0xF7),
+  Rgb::new(0xD9, 0x46, 0xEF),
+  Rgb::new(0xC0, 0x84, 0xFC),
+  Rgb::new(0xF7, 0xE3, 0x8B),
+  Rgb::new(0xFA, 0xCC, 0x15),
+  Rgb::new(0xEA, 0xB3, 0x08),
+  Rgb::new(0x5A, 0x23, 0x23),
+  Rgb::new(0x0F, 0x3D, 0x2E),
+  Rgb::new(0x1E, 0x3A, 0x5F),
+  Rgb::new(0x3B, 0x2A, 0x5A),
+  Rgb::new(0x5A, 0x2A, 0x3E),
+  Rgb::new(0x5A, 0x3E, 0x1E),
+];
+
+/// Colonnes de la grille du sélecteur.
+const PALETTE_COLONNES: usize = 6;
+/// Largeur (colonnes) d'une case de couleur.
+const PALETTE_CASE: usize = 8;
+
+/// État du sélecteur de couleur ouvert sur un champ.
+#[derive(Clone, Copy, Debug)]
+pub struct PaletteEtat
+  {
+    /// Index dans la liste « défaut » (0) suivie des couleurs.
+    index: usize,
+  }
+
+impl PaletteEtat
+  {
+    /// Nombre d'entrées (défaut compris).
+    fn total() -> usize
+      {
+        PALETTE.len() + 1
+      }
+
+    /// Couleur de l'entrée courante (`None` = défaut).
+    fn entree(&self) -> Option<Rgb>
+      {
+        if self.index == 0 { None } else { PALETTE.get(self.index - 1).copied() }
+      }
+
+    /// Sélection correspondant à la valeur d'un champ (`""` = défaut).
+    fn depuis_valeur(valeur: &str) -> Self
+      {
+        if valeur.trim().is_empty()
+          {
+            return Self { index: 0 };
+          }
+        let index = config::parse_couleur(valeur)
+          .and_then(|c| PALETTE.iter().position(|p| *p == c))
+          .map(|i| i + 1)
+          .unwrap_or(0);
+        Self { index }
+      }
+  }
+
 /// État du formulaire.
 #[derive(Debug)]
 pub struct Formulaire
@@ -50,6 +152,8 @@ pub struct Formulaire
     pub index: usize,
     /// `true` pendant l'édition du champ sélectionné.
     pub edition: bool,
+    /// Sélecteur de couleur ouvert, le cas échéant.
+    pub palette: Option<PaletteEtat>,
     /// Valeur avant l'édition (pour l'annulation par `Échap`).
     avant: String,
     /// Clés inconnues lues dans le fichier, préservées à l'écriture.
@@ -61,7 +165,7 @@ impl Formulaire
     /// Construit le formulaire depuis une configuration.
     pub fn nouvelle(config: Config) -> Self
       {
-        let champs = vec![
+        let mut champs = vec![
           champ("THEME", &config.theme),
           champ("TRIGGERS", &config.triggers.join(", ")),
           champ("SUFFIX_WIDTH", &config.suffix_width.to_string()),
@@ -69,11 +173,26 @@ impl Formulaire
           champ("NOTIFICATION", &bouton(config.notification)),
           champ("NOTIFICATION_SEUIL", &config.seuil_notification.to_string()),
           champ("HORODATAGE", &bouton(config.horodatage)),
+          champ("LIGNE_VIDE", &bouton(config.ligne_vide)),
         ];
+        let couleurs = [
+          ("STAT_FG", config.couleurs.stat_fg),
+          ("STAT_BG", config.couleurs.stat_bg),
+          ("CONTEXT_FG", config.couleurs.contexte_fg),
+          ("CONTEXT_BG", config.couleurs.contexte_bg),
+          ("PROMPT_FG", config.couleurs.prompt_fg),
+          ("PROMPT_BG", config.couleurs.prompt_bg),
+        ];
+        for (cle, couleur) in couleurs
+          {
+            let valeur = couleur.map(config::format_couleur).unwrap_or_default();
+            champs.push(champ(cle, &valeur));
+          }
         Self {
           champs,
           index: 0,
           edition: false,
+          palette: None,
           avant: String::new(),
           inconnues: config.inconnues,
         }
@@ -118,6 +237,13 @@ impl Formulaire
                     .max(1);
                 }
                 "HORODATAGE" => c.horodatage = est_active(&champ.valeur),
+                "LIGNE_VIDE" => c.ligne_vide = est_active(&champ.valeur),
+                "STAT_FG" => c.couleurs.stat_fg = config::parse_couleur(&champ.valeur),
+                "STAT_BG" => c.couleurs.stat_bg = config::parse_couleur(&champ.valeur),
+                "CONTEXT_FG" => c.couleurs.contexte_fg = config::parse_couleur(&champ.valeur),
+                "CONTEXT_BG" => c.couleurs.contexte_bg = config::parse_couleur(&champ.valeur),
+                "PROMPT_FG" => c.couleurs.prompt_fg = config::parse_couleur(&champ.valeur),
+                "PROMPT_BG" => c.couleurs.prompt_bg = config::parse_couleur(&champ.valeur),
                 _ => {}
               }
           }
@@ -127,6 +253,11 @@ impl Formulaire
     /// Traite une touche. Retourne `true` quand il faut quitter (et enregistrer).
     pub fn traiter(&mut self, touche: KeyEvent) -> bool
       {
+        if self.palette.is_some()
+          {
+            self.traiter_palette(touche);
+            return false;
+          }
         if self.edition
           {
             return self.traiter_edition(touche);
@@ -145,11 +276,56 @@ impl Formulaire
                   self.index += 1;
                 }
             }
-            KeyCode::Enter | KeyCode::Tab => self.entre_edition(),
+            KeyCode::Enter | KeyCode::Tab => self.ouvrir(),
             KeyCode::F(2) | KeyCode::Esc => return true,
             _ => {}
           }
         false
+      }
+
+    /// Ouvre le champ sélectionné : sélecteur de couleur, ou édition de ligne.
+    fn ouvrir(&mut self)
+      {
+        let cle = self.champs.get(self.index).expect("index de sélection hors bornes").cle;
+        if est_couleur(cle)
+          {
+            let valeur = &self.champs[self.index].valeur;
+            self.palette = Some(PaletteEtat::depuis_valeur(valeur));
+          }
+        else
+          {
+            self.entre_edition();
+          }
+      }
+
+    /// Traite une touche dans le sélecteur de couleur.
+    fn traiter_palette(&mut self, touche: KeyEvent)
+      {
+        let total = PaletteEtat::total();
+        let Some(mut etat) = self.palette else { return; };
+        match touche.code
+          {
+            KeyCode::Left => etat.index = etat.index.saturating_sub(1),
+            KeyCode::Right => etat.index = (etat.index + 1).min(total - 1),
+            KeyCode::Up => etat.index = etat.index.saturating_sub(PALETTE_COLONNES),
+            KeyCode::Down => etat.index = (etat.index + PALETTE_COLONNES).min(total - 1),
+            KeyCode::Enter | KeyCode::Tab => {
+              let valeur = etat.entree().map(config::format_couleur).unwrap_or_default();
+              if let Some(champ) = self.champs.get_mut(self.index)
+                {
+                  champ.curseur = valeur.chars().count();
+                  champ.valeur = valeur;
+                }
+              self.palette = None;
+              return;
+            }
+            KeyCode::Esc => {
+              self.palette = None;
+              return;
+            }
+            _ => {}
+          }
+        self.palette = Some(etat);
       }
 
     /// Traite une touche pendant l'édition d'un champ.
@@ -335,38 +511,50 @@ fn dessiner(frame: &mut ratatui::Frame<'_>, formulaire: &Formulaire)
       {
         let prefixe = format!("{:>14}  ", champ.cle);
         let largeur_prefixe = UnicodeWidthStr::width(prefixe.as_str());
-        let disponible = usize::from(zone.width).saturating_sub(largeur_prefixe).saturating_sub(3);
-        let valeur = tronquer(&champ.valeur, disponible);
-        let surligne = i == formulaire.index;
-        if surligne && formulaire.edition
+        let surligne = i == formulaire.index && formulaire.palette.is_none();
+        let style = if surligne && formulaire.edition
           {
-            let style = Style::default().fg(Color::Black).bg(Color::Cyan);
-            lignes.push(Line::from(vec![
-              Span::styled(prefixe, style),
-              Span::styled(valeur, style),
-            ]));
+            Style::default().fg(Color::Black).bg(Color::Cyan)
           }
         else if surligne
           {
-            let style = Style::default().add_modifier(Modifier::BOLD);
-            lignes.push(Line::from(vec![
-              Span::styled(prefixe, style),
-              Span::styled(valeur, style),
-            ]));
+            Style::default().add_modifier(Modifier::BOLD)
           }
         else
           {
-            lignes.push(Line::from(prefixe + &valeur));
+            Style::default()
+          };
+        let mut spans = vec![Span::styled(prefixe, style)];
+        if est_couleur(champ.cle)
+          {
+            match config::parse_couleur(&champ.valeur)
+              {
+                Some(c) => {
+                  spans.push(Span::styled("   ", style.bg(Color::Rgb(c.r, c.g, c.b))));
+                  spans.push(Span::styled(format!("  {}", config::format_couleur(c)), style));
+                }
+                None => spans.push(Span::styled("   défaut", style)),
+              }
           }
+        else
+          {
+            let disponible = usize::from(zone.width).saturating_sub(largeur_prefixe).saturating_sub(3);
+            spans.push(Span::styled(tronquer(&champ.valeur, disponible), style));
+          }
+        lignes.push(Line::from(spans));
       }
     lignes.push(Line::from(""));
-    lignes.push(Line::from(if formulaire.edition
+    lignes.push(Line::from(if formulaire.palette.is_some()
+      {
+        "Flèches choisir · Entrée valider · Échap annuler"
+      }
+    else if formulaire.edition
       {
         "Entrée valider · Échap annuler · ←/→/Début/Fin / Ctrl+←/→ déplacer · Retour arrière/Suppr supprimer"
       }
     else
       {
-        "↑/↓ choisir · Entrée éditer · F2 Enregistrer · Échap Quitter (enregistre)"
+        "↑/↓ choisir · Entrée éditer (couleur : palette) · F2 Enregistrer · Échap Quitter (enregistre)"
       }));
 
     let paragraphe = Paragraph::new(lignes).block(Block::default().borders(Borders::ALL).title(titre));
@@ -381,6 +569,83 @@ fn dessiner(frame: &mut ratatui::Frame<'_>, formulaire: &Formulaire)
         let y = zone.y + 1 + u16::try_from(formulaire.index).unwrap_or(u16::MAX);
         frame.set_cursor_position(Position::new(x.min(zone.x + zone.width - 2), y.min(zone.y + zone.height - 2)));
       }
+    if let Some(palette) = formulaire.palette
+      {
+        let cle = formulaire.champs.get(formulaire.index).map(|c| c.cle).unwrap_or("COULEUR");
+        dessiner_palette(frame, &palette, cle);
+      }
+  }
+
+/// Dessine le sélecteur de couleur (grille de cases colorées, entrée « défaut »).
+fn dessiner_palette(frame: &mut ratatui::Frame<'_>, etat: &PaletteEtat, cle: &str)
+  {
+    let total = PaletteEtat::total();
+    let lignes_nb = total.div_ceil(PALETTE_COLONNES);
+    let largeur = (PALETTE_COLONNES * (PALETTE_CASE + 1) + 3) as u16;
+    let hauteur = (lignes_nb + 4) as u16;
+    let aire = frame.area();
+    let largeur = largeur.min(aire.width);
+    let hauteur = hauteur.min(aire.height);
+    let popup = Rect {
+      x: aire.x + (aire.width.saturating_sub(largeur)) / 2,
+      y: aire.y + (aire.height.saturating_sub(hauteur)) / 2,
+      width: largeur,
+      height: hauteur,
+    };
+    frame.render_widget(Clear, popup);
+
+    let crochet = Style::default().add_modifier(Modifier::BOLD);
+    let mut lignes: Vec<Line> = Vec::new();
+    for ligne in 0..lignes_nb
+      {
+        let debut = ligne * PALETTE_COLONNES;
+        let fin = ((ligne + 1) * PALETTE_COLONNES).min(total);
+        let mut spans: Vec<Span> = Vec::new();
+        for index in debut..fin
+          {
+            let separateur = if index == etat.index
+              {
+                "["
+              }
+            else if index == etat.index + 1
+              {
+                "]"
+              }
+            else
+              {
+                " "
+              };
+            spans.push(Span::styled(separateur, crochet));
+            match if index == 0 { None } else { PALETTE.get(index - 1).copied() }
+              {
+                Some(c) => spans.push(Span::styled(
+                  " ".repeat(PALETTE_CASE),
+                  Style::default().bg(Color::Rgb(c.r, c.g, c.b)),
+                )),
+                None => spans.push(Span::styled(
+                  format!("{:<width$}", "défaut", width = PALETTE_CASE),
+                  Style::default(),
+                )),
+              }
+          }
+        if etat.index >= debut && etat.index == fin - 1
+          {
+            spans.push(Span::styled("]", crochet));
+          }
+        lignes.push(Line::from(spans));
+      }
+    lignes.push(Line::from(""));
+    let apercu = match etat.entree()
+      {
+        Some(c) => format!("sélection : {}  ■", config::format_couleur(c)),
+        None => "sélection : défaut du thème".to_string(),
+      };
+    lignes.push(Line::from(apercu));
+    lignes.push(Line::from("flèches choisir · Entrée valider · Échap annuler"));
+
+    let bloc = Paragraph::new(lignes)
+      .block(Block::default().borders(Borders::ALL).title(format!("{cle} — couleur")));
+    frame.render_widget(bloc, popup);
   }
 
 /// Résumé textuel de la configuration active (`--reload-rc`).
@@ -395,6 +660,19 @@ pub fn resume(config: &Config) -> String
     lignes.push(format!("  NOTIFICATION       : {}", if config.notification { "on" } else { "off" }));
     lignes.push(format!("  NOTIFICATION_SEUIL : {}", config.seuil_notification));
     lignes.push(format!("  HORODATAGE         : {}", if config.horodatage { "on" } else { "off" }));
+    lignes.push(format!("  LIGNE_VIDE         : {}", if config.ligne_vide { "on" } else { "off" }));
+    for (cle, couleur) in [
+      ("STAT_FG", config.couleurs.stat_fg),
+      ("STAT_BG", config.couleurs.stat_bg),
+      ("CONTEXT_FG", config.couleurs.contexte_fg),
+      ("CONTEXT_BG", config.couleurs.contexte_bg),
+      ("PROMPT_FG", config.couleurs.prompt_fg),
+      ("PROMPT_BG", config.couleurs.prompt_bg),
+    ]
+      {
+        let valeur = couleur.map(config::format_couleur).unwrap_or_else(|| "défaut".to_string());
+        lignes.push(format!("  {cle:<18}: {valeur}"));
+      }
     for (cle, valeur) in &config.inconnues
       {
         lignes.push(format!("  {cle:<18}: {valeur}  (clé inconnue, conservée)"));
@@ -414,11 +692,102 @@ mod tests
       }
 
     #[test]
-    fn le_formulaire_compte_les_sept_cles_dans_l_ordre_de_la_spec()
+    fn le_formulaire_compte_les_cles_dans_l_ordre_de_la_spec()
       {
         let f = Formulaire::nouvelle(Config::default());
         let cles: Vec<&str> = f.champs.iter().map(|c| c.cle).collect();
-        assert_eq!(cles, ["THEME", "TRIGGERS", "SUFFIX_WIDTH", "CAPTURE", "NOTIFICATION", "NOTIFICATION_SEUIL", "HORODATAGE"]);
+        assert_eq!(
+          cles,
+          [
+            "THEME", "TRIGGERS", "SUFFIX_WIDTH", "CAPTURE", "NOTIFICATION", "NOTIFICATION_SEUIL",
+            "HORODATAGE", "LIGNE_VIDE", "STAT_FG", "STAT_BG", "CONTEXT_FG", "CONTEXT_BG",
+            "PROMPT_FG", "PROMPT_BG"
+          ]
+        );
+      }
+
+    #[test]
+    fn une_couleur_ouvre_la_palette_et_la_selection_est_appliquee()
+      {
+        let mut f = Formulaire::nouvelle(Config::default());
+        for _ in 0..8
+          {
+            f.traiter(touche(KeyCode::Down));
+          }
+        assert_eq!(f.champs[f.index].cle, "STAT_FG");
+        f.traiter(touche(KeyCode::Enter));
+        assert!(f.palette.is_some(), "le champ couleur ouvre la palette");
+        assert!(!f.edition, "la palette remplace l'édition de ligne");
+        assert_eq!(f.palette.unwrap().index, 0, "on démarre sur « défaut »");
+        f.traiter(touche(KeyCode::Right));
+        let attendu = config::format_couleur(PALETTE[0]);
+        assert_eq!(f.palette.unwrap().entree(), Some(PALETTE[0]));
+        f.traiter(touche(KeyCode::Enter));
+        assert!(f.palette.is_none());
+        assert_eq!(f.champs[f.index].valeur, attendu);
+        assert_eq!(f.vers_config().couleurs.stat_fg, Some(PALETTE[0]));
+      }
+
+    #[test]
+    fn la_palette_se_navigue_aux_fleches_et_s_annule()
+      {
+        let mut f = Formulaire::nouvelle(Config::default());
+        for _ in 0..8
+          {
+            f.traiter(touche(KeyCode::Down));
+          }
+        f.traiter(touche(KeyCode::Enter));
+        f.traiter(touche(KeyCode::Down));
+        assert_eq!(f.palette.unwrap().index, PALETTE_COLONNES, "descend d'une ligne");
+        f.traiter(touche(KeyCode::Up));
+        assert_eq!(f.palette.unwrap().index, 0, "remonte d'une ligne");
+        f.traiter(touche(KeyCode::Left));
+        assert_eq!(f.palette.unwrap().index, 0, "la première case ne déborde pas à gauche");
+        f.traiter(touche(KeyCode::Esc));
+        assert!(f.palette.is_none(), "Échap ferme la palette");
+        assert_eq!(f.champs[f.index].valeur, "", "Échap n'altère pas la valeur");
+      }
+
+    #[test]
+    fn une_couleur_hors_palette_retombe_sur_defaut()
+      {
+        let config = Config {
+          couleurs: crate::theme::Surcharge { stat_fg: Some(Rgb::new(1, 2, 3)), ..crate::theme::Surcharge::default() },
+          ..Config::default()
+        };
+        let mut f = Formulaire::nouvelle(config);
+        for _ in 0..8
+          {
+            f.traiter(touche(KeyCode::Down));
+          }
+        assert_eq!(f.champs[f.index].valeur, "#010203");
+        f.traiter(touche(KeyCode::Enter));
+        assert_eq!(f.palette.unwrap().index, 0, "couleur hors palette → défaut");
+        f.traiter(touche(KeyCode::Esc));
+        assert_eq!(f.champs[f.index].valeur, "#010203", "l'annulation préserve la couleur");
+      }
+
+    #[test]
+    fn une_couleur_de_la_palette_est_presélectionnée_et_le_defaut_restaure_le_theme()
+      {
+        let config = Config {
+          couleurs: crate::theme::Surcharge { stat_fg: Some(PALETTE[3]), ..crate::theme::Surcharge::default() },
+          ..Config::default()
+        };
+        let mut f = Formulaire::nouvelle(config);
+        for _ in 0..8
+          {
+            f.traiter(touche(KeyCode::Down));
+          }
+        f.traiter(touche(KeyCode::Enter));
+        assert_eq!(f.palette.unwrap().index, 4);
+        while f.palette.unwrap().index != 0
+          {
+            f.traiter(touche(KeyCode::Up));
+          }
+        f.traiter(touche(KeyCode::Enter));
+        assert_eq!(f.champs[f.index].valeur, "", "l'entrée défaut vide le champ");
+        assert_eq!(f.vers_config().couleurs.stat_fg, None);
       }
 
     #[test]

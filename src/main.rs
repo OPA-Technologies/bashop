@@ -96,10 +96,13 @@ fn main() -> Result<()>
           {
             let config = config::charger();
             let theme = theme::resoudre(&config.theme, bashop::detect::privilege());
+            let palette = theme::palette(&theme, &config.couleurs);
+            let glyphe = theme.suffixe.glyphe;
+            let ligne_vide = config.ligne_vide;
             match shell.to_ascii_lowercase().as_str()
               {
-                "bash" => print!("{}", bootstrap::script_prompt_bash(&theme, config.suffix_width)),
-                "zsh" => print!("{}", bootstrap::script_prompt_zsh(&theme, config.suffix_width)),
+                "bash" => print!("{}", bootstrap::script_prompt_bash(&palette, glyphe, config.suffix_width, ligne_vide)),
+                "zsh" => print!("{}", bootstrap::script_prompt_zsh(&palette, glyphe, config.suffix_width, ligne_vide)),
                 _ => eprintln!("Shell non pris en charge pour prompt : {shell} (attendu : bash, zsh)"),
               }
           }
@@ -145,11 +148,12 @@ fn afficher_template(nom: &str)
           return;
         };
     let theme = theme::par_nom("classique");
+    let palette = theme::palette(&theme, &theme::Surcharge::default());
     let largeur = config::SUFFIX_WIDTH_DEFAUT;
     match shell
       {
-        Shell::Bash => println!("{}", bootstrap::prompt_bash(&theme, largeur)),
-        Shell::Zsh => println!("{}", bootstrap::prompt_zsh(&theme, largeur)),
+        Shell::Bash => println!("{}", bootstrap::prompt_bash(&palette, theme.suffixe.glyphe, largeur)),
+        Shell::Zsh => println!("{}", bootstrap::prompt_zsh(&palette, theme.suffixe.glyphe, largeur)),
         _ => println!("Aucun template de prompt pour « {} ».", shell.nom()),
       }
   }

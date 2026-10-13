@@ -24,6 +24,12 @@ impl Rgb
       {
         Self { r, g, b }
       }
+
+    /// Représentation en triplet `(r, g, b)`.
+    pub const fn tuple(self) -> (u8, u8, u8)
+      {
+        (self.r, self.g, self.b)
+      }
   }
 
 /// Suffixe de fin de prompt : un glyphe et sa couleur.
@@ -76,6 +82,173 @@ pub const ROOT: Theme =
     suffixe: Suffixe { glyphe: "###>", couleur: Rgb::new(0xF3, 0x8B, 0xA8) },
     fond: Rgb::new(0x5A, 0x23, 0x23),
   };
+
+/// Texte par défaut des lignes `term_stat` et `term_context`.
+pub const TEXTE_CADRE: Rgb = Rgb::new(0xE6, 0xED, 0xF3);
+/// Fond par défaut du cadre (`term_stat`, `term_context`, prompt).
+pub const FOND_CADRE: Rgb = Rgb::new(0x2E, 0x34, 0x40);
+/// Couleur par défaut du chemin dans le prompt.
+pub const COULEUR_CHEMIN: Rgb = Rgb::new(0x89, 0xB4, 0xFA);
+/// Couleur par défaut du numéro d'historique dans le prompt.
+pub const COULEUR_HISTORIQUE: Rgb = Rgb::new(0x93, 0x99, 0xB2);
+/// Couleur par défaut de l'heure de début de commande dans le prompt.
+pub const COULEUR_HEURE: Rgb = Rgb::new(0x8B, 0xA1, 0xB9);
+/// Part de blanc appliquée aux couleurs du thème `wheel` (classique éclairci).
+pub const ECLAIRCISSEMENT_WHEEL: f32 = 0.40;
+
+/// Couleurs choisies par l'utilisateur dans `~/.opshellrc`. Une valeur absente
+/// (`None`) laisse le défaut du thème. Les surcharges ne s'appliquent qu'aux
+/// thèmes `classique` et `wheel` ; `root` reste toujours fixe.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Surcharge
+  {
+    /// Avant-plan de `term_stat`.
+    pub stat_fg: Option<Rgb>,
+    /// Fond de `term_stat`.
+    pub stat_bg: Option<Rgb>,
+    /// Avant-plan de `term_context`.
+    pub contexte_fg: Option<Rgb>,
+    /// Fond de `term_context`.
+    pub contexte_bg: Option<Rgb>,
+    /// Couleur d'accent du prompt (identité et suffixe).
+    pub prompt_fg: Option<Rgb>,
+    /// Fond du prompt.
+    pub prompt_bg: Option<Rgb>,
+  }
+
+impl Surcharge
+  {
+    /// Vrai si aucune couleur n'est personnalisée.
+    pub fn vide(&self) -> bool
+      {
+        *self == Self::default()
+      }
+  }
+
+/// Palette effective (cadre et prompt) après résolution du thème et des
+/// surcharges utilisateur.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette
+  {
+    /// Avant-plan de `term_stat`.
+    pub stat_fg: Rgb,
+    /// Fond de `term_stat`.
+    pub stat_bg: Rgb,
+    /// Avant-plan de `term_context`.
+    pub contexte_fg: Rgb,
+    /// Fond de `term_context`.
+    pub contexte_bg: Rgb,
+    /// Couleur d'accent du prompt (identité et suffixe).
+    pub prompt_fg: Rgb,
+    /// Fond du prompt.
+    pub prompt_bg: Rgb,
+    /// Chemin absolu du prompt.
+    pub prompt_chemin: Rgb,
+    /// Numéro d'historique du prompt.
+    pub prompt_historique: Rgb,
+    /// Heure de début de commande du prompt.
+    pub prompt_heure: Rgb,
+  }
+
+impl Palette
+  {
+    /// Palette de base (`classique` sans personnalisation).
+    pub fn defaut() -> Self
+      {
+        Self {
+          stat_fg: TEXTE_CADRE,
+          stat_bg: FOND_CADRE,
+          contexte_fg: TEXTE_CADRE,
+          contexte_bg: FOND_CADRE,
+          prompt_fg: CLASSIQUE.accent,
+          prompt_bg: FOND_CADRE,
+          prompt_chemin: COULEUR_CHEMIN,
+          prompt_historique: COULEUR_HISTORIQUE,
+          prompt_heure: COULEUR_HEURE,
+        }
+      }
+
+    /// Applique les surcharges non nulles.
+    fn appliquer(&mut self, surcharge: &Surcharge)
+      {
+        if let Some(c) = surcharge.stat_fg
+          {
+            self.stat_fg = c;
+          }
+        if let Some(c) = surcharge.stat_bg
+          {
+            self.stat_bg = c;
+          }
+        if let Some(c) = surcharge.contexte_fg
+          {
+            self.contexte_fg = c;
+          }
+        if let Some(c) = surcharge.contexte_bg
+          {
+            self.contexte_bg = c;
+          }
+        if let Some(c) = surcharge.prompt_fg
+          {
+            self.prompt_fg = c;
+          }
+        if let Some(c) = surcharge.prompt_bg
+          {
+            self.prompt_bg = c;
+          }
+      }
+
+    /// Éclaircit toutes les couleurs vers le blanc.
+    fn eclaircir(&mut self, facteur: f32)
+      {
+        self.stat_fg = eclaircir_rgb(self.stat_fg, facteur);
+        self.stat_bg = eclaircir_rgb(self.stat_bg, facteur);
+        self.contexte_fg = eclaircir_rgb(self.contexte_fg, facteur);
+        self.contexte_bg = eclaircir_rgb(self.contexte_bg, facteur);
+        self.prompt_fg = eclaircir_rgb(self.prompt_fg, facteur);
+        self.prompt_bg = eclaircir_rgb(self.prompt_bg, facteur);
+        self.prompt_chemin = eclaircir_rgb(self.prompt_chemin, facteur);
+        self.prompt_historique = eclaircir_rgb(self.prompt_historique, facteur);
+        self.prompt_heure = eclaircir_rgb(self.prompt_heure, facteur);
+      }
+  }
+
+/// Mélange une couleur vers le blanc (`facteur` : 0 → inchangée, 1 → blanc).
+fn eclaircir_rgb(couleur: Rgb, facteur: f32) -> Rgb
+  {
+    let f = facteur.clamp(0.0, 1.0);
+    let melange = |v: u8| (f32::from(v) + (255.0 - f32::from(v)) * f).round() as u8;
+    Rgb::new(melange(couleur.r), melange(couleur.g), melange(couleur.b))
+  }
+
+/// Résout la palette effective d'un thème, surcharges utilisateur appliquées.
+///
+/// `classique` rend exactement les couleurs choisies ; `wheel` reprend
+/// `classique` (personnalisé ou non) nettement éclairci ; `root` reste **fixe**
+/// et ignore toute personnalisation.
+pub fn palette(theme: &Theme, surcharge: &Surcharge) -> Palette
+  {
+    if theme.nom == "root"
+      {
+        return Palette {
+          stat_fg: TEXTE_CADRE,
+          stat_bg: ROOT.fond,
+          contexte_fg: TEXTE_CADRE,
+          contexte_bg: ROOT.fond,
+          prompt_fg: ROOT.accent,
+          prompt_bg: ROOT.fond,
+          prompt_chemin: COULEUR_CHEMIN,
+          prompt_historique: COULEUR_HISTORIQUE,
+          prompt_heure: COULEUR_HEURE,
+        };
+      }
+    let mut palette = Palette::defaut();
+    palette.appliquer(surcharge);
+    if theme.nom == "wheel"
+      {
+        palette.eclaircir(ECLAIRCISSEMENT_WHEEL);
+      }
+    palette
+  }
 
 /// Résout un thème par son nom (repli sur `classique`).
 pub fn par_nom(nom: &str) -> Theme
@@ -161,5 +334,55 @@ mod tests
         assert_eq!(WHEEL.fond, FOND_NEUTRE);
         assert_ne!(ROOT.fond, FOND_NEUTRE);
         assert!(tire_vers_le_rouge(ROOT.fond), "le fond root doit tirer vers le rouge");
+      }
+
+    #[test]
+    fn la_palette_classique_rend_les_surcharges_telles_quelles()
+      {
+        let rouge = Rgb::new(0xFF, 0x00, 0x00);
+        let surcharge = Surcharge { stat_fg: Some(rouge), prompt_bg: Some(rouge), ..Surcharge::default() };
+        let p = palette(&CLASSIQUE, &surcharge);
+        assert_eq!(p.stat_fg, rouge, "la surcharge est rendue sans altération");
+        assert_eq!(p.prompt_bg, rouge);
+        assert_eq!(p.stat_bg, FOND_CADRE, "les couleurs non surchargées restent par défaut");
+        assert_eq!(p.prompt_fg, CLASSIQUE.accent);
+      }
+
+    #[test]
+    fn la_palette_wheel_eclaircit_le_classique()
+      {
+        let classique = palette(&CLASSIQUE, &Surcharge::default());
+        let wheel = palette(&WHEEL, &Surcharge::default());
+        assert!(
+          wheel.stat_bg.r > classique.stat_bg.r
+            && wheel.stat_bg.g > classique.stat_bg.g
+            && wheel.stat_bg.b > classique.stat_bg.b,
+          "le fond wheel doit être nettement plus clair : {wheel:?}"
+        );
+        assert!(
+          wheel.prompt_fg.r >= classique.prompt_fg.r
+            && wheel.prompt_fg.g >= classique.prompt_fg.g
+            && wheel.prompt_fg.b >= classique.prompt_fg.b,
+          "l'accent wheel doit être plus clair : {wheel:?}"
+        );
+      }
+
+    #[test]
+    fn la_palette_root_ignore_la_personnalisation()
+      {
+        let vert = Rgb::new(0x00, 0xFF, 0x00);
+        let surcharge = Surcharge { stat_bg: Some(vert), prompt_fg: Some(vert), ..Surcharge::default() };
+        let p = palette(&ROOT, &surcharge);
+        assert_eq!(p.stat_bg, ROOT.fond, "root garde son fond rouge");
+        assert_eq!(p.prompt_fg, ROOT.accent, "root garde son accent");
+        assert_eq!(p.prompt_bg, ROOT.fond);
+      }
+
+    #[test]
+    fn eclaircir_borne_les_extremes()
+      {
+        assert_eq!(eclaircir_rgb(Rgb::new(0, 0, 0), 0.0), Rgb::new(0, 0, 0));
+        assert_eq!(eclaircir_rgb(Rgb::new(10, 20, 30), 1.0), Rgb::new(255, 255, 255));
+        assert_eq!(eclaircir_rgb(Rgb::new(0, 0, 0), 0.5), Rgb::new(128, 128, 128));
       }
   }
