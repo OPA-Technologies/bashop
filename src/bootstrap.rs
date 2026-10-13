@@ -93,15 +93,18 @@ pub fn suffixe_cadre(theme: &Theme, largeur: u16) -> String
 /// (`__BASHOP_HIST`, gris italique, cadré à droite) et le suffixe.
 ///
 /// Tout le préfixe (jusqu'au suffixe et à l'espace qui suit) porte le **fond du
-/// cadre** ; une réinitialisation complète précède `OSC 133;B`, de sorte que la
-/// saisie de l'utilisateur retrouve le fond par défaut.
+/// cadre**. Le fond n'est posé qu'**après** l'épinglage, de sorte que
+/// l'effacement de fin de ligne (`\e[K`) se fait sur le fond **par défaut** :
+/// seule l'invite est surlignée, jamais le reste de la ligne. Une
+/// réinitialisation complète précède `OSC 133;B`, donc la saisie de l'utilisateur
+/// garde le fond par défaut.
 pub fn prompt_bash(theme: &Theme, largeur_suffixe: u16) -> String
   {
     let accent = (theme.accent.r, theme.accent.g, theme.accent.b);
     let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
     let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
     format!(
-      "\\[{fond}\\]\\[{pin}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe} \\[{reinit}\\]\\[{osc_commande}\\]",
+      "\\[{reinit}\\]\\[{pin}\\]\\[{fond}\\]\\[{osc_prompt}\\]\\[{heure}\\]${{__BASHOP_HEURE}}\\[{ra}\\] \\[{user}\\]\\u@\\h\\[{ra}\\] \\[{chemin}\\]${{PWD}}\\[{ra}\\] \\[{hist}\\]${{__BASHOP_HIST}}\\[{ra}\\] \\[{suffixe_col}\\]{suffixe} \\[{reinit}\\]\\[{osc_commande}\\]",
       fond = fond_sgr(fond),
       pin = PIN,
       osc_prompt = OSC_PROMPT,
@@ -124,7 +127,7 @@ pub fn prompt_zsh(theme: &Theme, largeur_suffixe: u16) -> String
     let fond = (theme.fond.r, theme.fond.g, theme.fond.b);
     let suffixe = (theme.suffixe.couleur.r, theme.suffixe.couleur.g, theme.suffixe.couleur.b);
     format!(
-      "{fond}{pin}{heure}${{__BASHOP_HEURE}}{ra} {user}%n@%m{ra} {chemin}/{ra} {hist}${{__BASHOP_HIST}}{ra} {suf}{suffixe} {reinit}",
+      "{reinit}{pin}{fond}{heure}${{__BASHOP_HEURE}}{ra} {user}%n@%m{ra} {chemin}/{ra} {hist}${{__BASHOP_HIST}}{ra} {suf}{suffixe} {reinit}",
       fond = fond_zsh(fond),
       pin = PIN_ZSH,
       heure = couleur_italique_zsh(COULEUR_HEURE, fond),
@@ -376,6 +379,20 @@ mod tests
         assert!(bash.contains(&fond), "fond du cadre absent : {bash}");
         let zsh = prompt_zsh(&CLASSIQUE, 6);
         assert!(zsh.contains(&fond), "fond du cadre absent (zsh) : {zsh}");
+      }
+
+    #[test]
+    fn l_effacement_de_ligne_reste_sur_le_fond_par_defaut()
+      {
+        let fond = format!("48;2;{};{};{}", CLASSIQUE.fond.r, CLASSIQUE.fond.g, CLASSIQUE.fond.b);
+        let bash = prompt_bash(&CLASSIQUE, 6);
+        let pin = bash.find("LINES};1H").expect("épinglage");
+        let fond_pos = bash.find(&fond).expect("fond du cadre");
+        assert!(pin < fond_pos, "le fond doit être posé après l'effacement : {bash}");
+        let zsh = prompt_zsh(&CLASSIQUE, 6);
+        let pin = zsh.find("LINES};1H").expect("épinglage (zsh)");
+        let fond_pos = zsh.find(&fond).expect("fond du cadre (zsh)");
+        assert!(pin < fond_pos, "le fond doit être posé après l'effacement (zsh) : {zsh}");
       }
 
     #[test]

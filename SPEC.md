@@ -106,9 +106,15 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 - Le FQDN privilégie `hostname -f`, puis `hostname -d`, `dnsdomainname` et
   `/etc/resolv.conf` (domaine/localisé), sans jamais revenir à un hôte nu si un
   domaine est résoluble.
-- En **mode capture** (secret), la ligne passe par `providers::masquer` : le nom
-  d'hôte, le FQDN, l'IP et les secrets y sont masqués comme dans la zone
-  centrale, de sorte que `term_stat` reste synchronisé avec la bascule `F2`.
+- En **mode capture** (secret), chaque fragment (gauche, centre, droite) passe
+  par `providers::masquer` **avant** la répartition : le nom d'hôte, le FQDN,
+  l'IP et les secrets y sont masqués comme dans la zone centrale, de sorte que
+  `term_stat` reste synchronisé avec la bascule `F2`. La répartition s'appuie
+  sur le texte déjà masqué, donc la ligne conserve toujours la pleine largeur
+  (le masque IPv4 `x.x.x.x` ne décale plus le bord droit).
+- La répartition (`repartir`) raisonne en **colonnes d'affichage**
+  (`unicode-width`) : la ligne occupe exactement la largeur du terminal, glyphes
+  larges (drapeau pays, emoji) compris.
 - Style par défaut : fond B1 `#2E3440`, texte F1 `#E6EDF3`, gras.
 
 ### 3.2 `term_context` (dernière ligne)
@@ -143,7 +149,12 @@ parenthèses (**gris, italique, cadré à droite**), invite (flèche grasse), ch
   outre explicitement le fond du thème (comme `term_stat`/`term_context`,
   couleurs conservées) et une **réinitialisation complète** précède la saisie :
   seule l'invite est en surbrillance, le texte tapé par l'utilisateur garde le
-  fond par défaut.
+  fond par défaut. Le fond n'est posé qu'**après** l'effacement de fin de ligne,
+  de sorte que cet effacement se fait sur le fond par défaut et ne surligne pas
+  le reste de la ligne.
+- **Mode capture** : le masquage de la zone centrale remplace le nom d'hôte par
+  des `#` **à longueur constante**, ce qui préserve la mise en forme de la ligne
+  (fond du prompt et couleurs des segments restent visibles, hôte masqué).
 
 - **Épinglé sur l'avant-dernière ligne** : le curseur du shell est repositionné
   sur la dernière ligne de sa zone (juste au-dessus de `term_context`) à chaque

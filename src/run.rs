@@ -1175,8 +1175,7 @@ impl Vue<'_>
           {
             let source = base + lig as isize;
             let depuis_arriere = source < arriere;
-            let mut spans: Vec<Span> = Vec::new();
-            let mut courant: Option<(Style, String)> = None;
+            let mut paires: Vec<(char, Style)> = Vec::with_capacity(largeur);
             for col in 0..largeur
               {
                 let sur_ghost =
@@ -1210,27 +1209,24 @@ impl Vue<'_>
                       }
                     (cellule.c, style_cellule(&cellule))
                   };
-                match &mut courant
-                  {
-                    Some((style_courant, texte)) if *style_courant == style => texte.push(caractere),
-                    Some((style_courant, texte)) => {
-                      spans.push(Span::styled(std::mem::take(texte), *style_courant));
-                      courant = Some((style, caractere.to_string()));
-                    }
-                    None => courant = Some((style, caractere.to_string())),
-                  }
+                paires.push((caractere, style));
               }
-            if let Some((style, texte)) = courant
-              {
-                spans.push(Span::styled(texte, style));
-              }
+            let mut spans = spans_depuis_paires(&paires, None);
             if self.config.capture
               {
-                let brut: String = spans.iter().map(|span| span.content.as_ref()).collect();
+                let brut: String = paires.iter().map(|(c, _)| *c).collect();
                 let masque = providers::masquer(&brut);
                 if masque != brut
                   {
-                    spans = vec![Span::raw(masque)];
+                    let remplacement: Vec<char> = masque.chars().collect();
+                    spans = if remplacement.len() == paires.len()
+                      {
+                        spans_depuis_paires(&paires, Some(&remplacement))
+                      }
+                    else
+                      {
+                        vec![Span::raw(masque)]
+                      };
                   }
               }
             lignes.push(Line::from(spans));
@@ -1345,6 +1341,34 @@ fn style_cellule(cellule: &Cellule) -> Style
         style = style.add_modifier(Modifier::SLOW_BLINK);
       }
     style
+  }
+
+/// Regroupe une suite de `(caractère, style)` en *spans* homogènes. Quand
+/// `remplacement` est fourni, chaque caractère est remplacé (même index) tout en
+/// conservant le style d'origine : le masquage à longueur constante (nom d'hôte)
+/// préserve ainsi la mise en couleur, notamment le fond du prompt.
+fn spans_depuis_paires(paires: &[(char, Style)], remplacement: Option<&[char]>) -> Vec<Span<'static>>
+  {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut courant: Option<(Style, String)> = None;
+    for (i, (caractere, style)) in paires.iter().enumerate()
+      {
+        let caractere = remplacement.map_or(*caractere, |r| r[i]);
+        match &mut courant
+          {
+            Some((style_courant, texte)) if *style_courant == *style => texte.push(caractere),
+            Some((style_courant, texte)) => {
+              spans.push(Span::styled(std::mem::take(texte), *style_courant));
+              courant = Some((*style, caractere.to_string()));
+            }
+            None => courant = Some((*style, caractere.to_string())),
+          }
+      }
+    if let Some((style, texte)) = courant
+      {
+        spans.push(Span::styled(texte, style));
+      }
+    spans
   }
 
 /// Style de la suggestion fantôme affichée après le curseur.
