@@ -31,7 +31,8 @@ Options de `install.sh` :
 - `VARIANTE` : variante d'archive à privilégier (`musl` sur Synology, vide =
   binaire natif de l'OS). Détectée automatiquement sur DSM.
 - `BASHOP_BIN` : chemin d'un binaire local à installer au lieu de télécharger.
-- `BASHOP_INDEX` : URL de l'index JSON (défaut : releases GitHub).
+- `BASHOP_INDEX` : URL de l'index JSON (défaut : `dist/index.json` du dépôt,
+  servi via `raw.githubusercontent.com`).
 
 `install.sh` **sélectionne** l'entrée de l'index selon l'OS et l'architecture
 détectés (et la variante), puis vérifie le SHA256 de l'archive avant de

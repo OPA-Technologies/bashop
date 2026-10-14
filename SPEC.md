@@ -444,7 +444,11 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
   préférée automatiquement ; `VARIANTE` force un choix, `VERSION` épingle une
   version.
 - **Index JSON** (`build/index.sh` → `dist/index.json`) : chaque entrée associe
-  `os`/`arch`/`version`/**`variante`** à une `url` et un `sha256`.
+  `os`/`arch`/`version`/**`variante`** à une `url` et un `sha256`. L'index est
+  versionné dans le dépôt et les installateurs le lisent par défaut depuis
+  `raw.githubusercontent.com/…/master/dist/index.json` (déterministe, sans
+  dépendre du redirect `releases/latest` de GitHub) ; il est aussi joint aux
+  *releases* comme asset `index.json`.
 - **Nomenclature des archives** :
   `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (ex.
   `bashop-0.5.1-linux-x86_64-musl.tar.gz`).

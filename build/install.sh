@@ -24,7 +24,7 @@ PREFIX="${PREFIX:-$HOME/.local}"
 VERSION="${VERSION:-}"
 VARIANTE="${VARIANTE:-}"
 BASHOP_BIN="${BASHOP_BIN:-}"
-BASHOP_INDEX="${BASHOP_INDEX:-https://github.com/OPA-Technologies/bashop/releases/latest/download/index.json}"
+BASHOP_INDEX="${BASHOP_INDEX:-https://raw.githubusercontent.com/OPA-Technologies/bashop/master/dist/index.json}"
 
 erreur()
   {
