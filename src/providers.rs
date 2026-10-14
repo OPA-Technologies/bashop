@@ -4,6 +4,7 @@
 //! Tout est best-effort : une information indisponible renvoie une chaîne vide
 //! plutôt que de faire échouer l'affichage.
 
+#[cfg(unix)]
 use std::ffi::CStr;
 use std::net::{IpAddr, UdpSocket};
 use std::sync::OnceLock;
@@ -157,29 +158,12 @@ fn resolver_ptrs(ip: &str) -> Option<String>
           )
         }
       };
-    // Les « size_t » (BSD, macOS) remplacent les « socklen_t » (Linux/Android)
-    // pour la taille des buffers hôte/service de `getnameinfo`.
-    #[cfg(any(
-      target_os = "freebsd",
-      target_os = "openbsd",
-      target_os = "netbsd",
-      target_os = "dragonfly",
-      target_os = "macos",
-      target_os = "ios",
-      target_os = "tvos",
-      target_os = "watchos"
-    ))]
+    // Les « size_t » (FreeBSD, DragonFly, OpenBSD) remplacent les « socklen_t »
+    // (Linux/Android, mais aussi macOS/iOS et NetBSD) pour la taille des buffers
+    // hôte/service de `getnameinfo`.
+    #[cfg(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))]
     type TailleTampon = libc::size_t;
-    #[cfg(not(any(
-      target_os = "freebsd",
-      target_os = "openbsd",
-      target_os = "netbsd",
-      target_os = "dragonfly",
-      target_os = "macos",
-      target_os = "ios",
-      target_os = "tvos",
-      target_os = "watchos"
-    )))]
+    #[cfg(not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd")))]
     type TailleTampon = libc::socklen_t;
     let mut tampon = vec![0u8; libc::NI_MAXHOST as usize];
     let code = unsafe {

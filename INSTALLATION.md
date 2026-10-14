@@ -38,6 +38,24 @@ Options de `install.sh` :
 détectés (et la variante), puis vérifie le SHA256 de l'archive avant de
 l'installer.
 
+## Dépendances (aucune obligatoire)
+
+Bashop ne requiert **aucune** dépendance à la compilation ou à l'exécution pour
+fonctionner : les cibles pré-compilées sont autonomes (musl statique pour
+DSM/SRM). Seul le **clic-milieu (coller)** cherche, en option, un outil de
+presse-papier système selon l'OS :
+
+| OS | Outils consultés (par ordre) | Paquet |
+|----|------------------------------|--------|
+| Linux (Wayland) | `wl-paste`, `wl-paste -p` | `wl-clipboard` |
+| Linux (X11) | `xclip`, `xsel` | `xclip` / `xsel` |
+| macOS, FreeBSD | `pbpaste` | fourni par l'OS |
+| Windows | `pwsh`/`powershell` (`Get-Clipboard`) | fourni par l'OS |
+
+En l'absence de tout outil, le collage retombe sur la **dernière copie interne**
+(OSC 52) ; s'il n'y en a pas, une notification « presse-papier vide » s'affiche.
+Aucun paquet n'est donc indispensable.
+
 ## Cibles binaires produites
 
 | Plateforme | Archive | Liaison |

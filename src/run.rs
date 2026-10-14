@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use crossterm::event::{
-  self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-  KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent,
-  MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+  self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event, KeyCode, KeyEvent,
+  KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind,
+  PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
@@ -146,7 +146,13 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       sortie,
       PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
     );
-    write!(sortie, "{}{}", definir_fond(palette.prompt_bg.tuple()), DESACTIVER_DEFILEMENT_ALTERNE)?;
+    write!(
+      sortie,
+      "{}{}{}",
+      definir_fond(palette.prompt_bg.tuple()),
+      DESACTIVER_DEFILEMENT_ALTERNE,
+      ACTIVER_SOURIS
+    )?;
     sortie.flush()?;
     let backend = CrosstermBackend::new(sortie);
     let mut terminal = RatTerminal::new(backend)?;
@@ -178,8 +184,15 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       demarrage_commande: None,
       instant_commande: None,
       notification: None,
+      presse_papier_interne: None,
       quitter: false,
-      capture_souris: false,
+      selection: None,
+      souris_pressee: false,
+      selection_a_glisse: false,
+      clic_courant: 0,
+      derniere_click: None,
+      derniere_ligne_souris: 0,
+      derniere_col_souris: 0,
     };
 
     let resultat = app.boucle(&mut terminal);
@@ -217,12 +230,16 @@ fn definir_fond(fond: (u8, u8, u8)) -> String
     format!("\x1b]11;rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}\x1b\\")
   }
 
-/// Désactive le défilement alterné (`DECSET 1007`). Sans cela, le terminal
-/// traduit la molette en `↑`/`↓` dans l'écran alterné : au prompt, cela rappelle
-/// l'historique du shell au lieu de faire défiler l'affichage. Le défilement de
-/// la zone centrale reste assuré par `PagePréc`/`PageSuiv`, et la **sélection
-/// native** (donc le copier-coller) est préservée puisque la souris n'est pas
-/// captée au prompt.
+/// Active la capture souris : suivi bouton (`1000`) + glisser (`1002`) + SGR
+/// (`1006`), **sans** `1003` (tout mouvement) pour éviter un flot d'évènements
+/// inutiles. Bashop gère alors lui-même la molette (scrollback) et la sélection
+/// (copie OSC 52) ; la sélection native de l'hôte reste accessible via `Maj`.
+const ACTIVER_SOURIS: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+
+/// Désactive le défilement alterné (`DECSET 1007`) : la molette ne doit pas être
+/// traduite en `↑`/`↓` (ce qui rappellerait l'historique du shell). La capture
+/// souris active fournit de toute façon la molette comme évènement souris.
+/// Rétabli à la sortie (best-effort) par [`REACTIVER_DEFILEMENT_ALTERNE`].
 const DESACTIVER_DEFILEMENT_ALTERNE: &str = "\x1b[?1007l";
 /// Rétablit le défilement alterné à la sortie (best-effort).
 const REACTIVER_DEFILEMENT_ALTERNE: &str = "\x1b[?1007h";
@@ -262,8 +279,15 @@ struct App
     demarrage_commande: Option<Instant>,
     instant_commande: Option<String>,
     notification: Option<(String, Instant)>,
+    presse_papier_interne: Option<String>,
     quitter: bool,
-    capture_souris: bool,
+    selection: Option<Selection>,
+    souris_pressee: bool,
+    selection_a_glisse: bool,
+    clic_courant: u8,
+    derniere_click: Option<(Instant, u16, u16)>,
+    derniere_ligne_souris: u16,
+    derniere_col_souris: u16,
   }
 
 impl App
@@ -288,7 +312,6 @@ impl App
                       self.dernier_flux = Instant::now();
                       self.rafraichir_privilege();
                       self.sur_fin_commande();
-                      self.maj_capture_souris(terminal)?;
                       sale = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -319,11 +342,15 @@ impl App
                       sale = true;
                     }
                     Event::Mouse(souris) => {
-                      self.souris(&souris)?;
+                      self.souris(terminal, &souris)?;
                       sale = true;
                     }
                     _ => {}
                   }
+              }
+            if self.auto_defilement()
+              {
+                sale = true;
               }
             if sale
               {
@@ -338,6 +365,9 @@ impl App
       {
         self.largeur = largeur.max(1);
         self.hauteur = hauteur.max(3);
+        self.selection = None;
+        self.souris_pressee = false;
+        self.selection_a_glisse = false;
         let lignes_shell = self.hauteur.saturating_sub(2).max(1);
         self.term.redimensionner(self.largeur, lignes_shell);
         self.master.resize(PtySize {
@@ -368,6 +398,7 @@ impl App
             }
             _ => {}
           }
+        self.selection = None;
         let au_prompt = self.etat_effectif();
         if au_prompt
           {
@@ -402,6 +433,12 @@ impl App
                   return self.accepter_ghost_complet();
                 }
                 KeyCode::Enter if touche.modifiers.contains(KeyModifiers::CONTROL) => {
+                  return self.accepter_ghost_mot();
+                }
+                KeyCode::Right
+                  if touche.modifiers.contains(KeyModifiers::CONTROL)
+                    && self.ghost_actif().is_some_and(|reste| !reste.is_empty()) =>
+                {
                   return self.accepter_ghost_mot();
                 }
                 KeyCode::Enter => return self.valider(),
@@ -753,47 +790,206 @@ impl App
           }
       }
 
-    /// Miroite au niveau du terminal la demande de suivi souris de l'enfant :
-    /// la capture n'est activée que lorsqu'un programme enfant la réclame
-    /// (DECSET `1000`/`1002`/`1003`), afin de préserver la sélection et le
-    /// copier-coller natifs au prompt.
-    fn maj_capture_souris(&mut self, terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>) -> Result<()>
-      {
-        let suivi = self.term.suivi_souris();
-        if let Some(actif) = bascule_capture(self.capture_souris, suivi)
-          {
-            let arriere = terminal.backend_mut();
-            if actif
-              {
-                execute!(arriere, EnableMouseCapture)?;
-              }
-            else
-              {
-                execute!(arriere, DisableMouseCapture)?;
-              }
-            arriere.flush()?;
-            self.capture_souris = actif;
-          }
-        Ok(())
-      }
-
-    /// Traite un évènement souris : transmis si l'enfant l'a demandé. À défaut
-    /// (repli), la molette fait défiler l'**affichage** (jamais l'historique du
-    /// shell : l'alternate-scroll est désactivé au démarrage).
-    fn souris(&mut self, ev: &MouseEvent) -> Result<()>
+    /// Traite un évènement souris.
+    ///
+    /// Si le programme enfant réclame le suivi souris, l'évènement lui est
+    /// **transmis** (encodé selon son protocole). Sinon Bashop l'exploite :
+    /// molette → défilement du scrollback, glisser gauche → sélection copiée en
+    /// OSC 52, clic-milieu → collage du presse-papier.
+    fn souris(
+      &mut self,
+      terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>,
+      ev: &MouseEvent,
+    ) -> Result<()>
       {
         if self.term.suivi_souris()
-          && let Some(octets) = encoder_souris(&self.term, ev)
           {
-            self.ecrivain.write_all(&octets)?;
-            self.ecrivain.flush()?;
+            if let Some(octets) = encoder_souris(&self.term, ev)
+              {
+                self.ecrivain.write_all(&octets)?;
+                self.ecrivain.flush()?;
+              }
             return Ok(());
           }
         match ev.kind
           {
             MouseEventKind::ScrollUp => self.defiler(3),
             MouseEventKind::ScrollDown => self.defiler(-3),
+            MouseEventKind::Down(MouseButton::Left) => self.debut_selection(ev),
+            MouseEventKind::Drag(MouseButton::Left) => self.etendre_selection(ev),
+            MouseEventKind::Up(MouseButton::Left) => self.fin_selection(terminal)?,
+            MouseEventKind::Down(MouseButton::Middle) => self.coller_presse_papier()?,
             _ => {}
+          }
+        Ok(())
+      }
+
+    /// Position `(source, colonne)` sous le pointeur, si elle tombe dans la zone
+    /// centrale (hors lignes de cadre). `source` est un index absolu couvrant
+    /// l'historique défilant puis la grille visible.
+    fn coord_source(&self, ev: &MouseEvent) -> Option<(usize, u16)>
+      {
+        if self.hauteur < 3 || ev.column >= self.largeur
+          {
+            return None;
+          }
+        if ev.row == 0 || ev.row >= self.hauteur - 1
+          {
+            return None;
+          }
+        let lig = (ev.row - 1) as isize;
+        let arriere = self.term.grid.arriere_plan_len() as isize;
+        let base = arriere - self.decalage as isize;
+        let source = base + lig;
+        (source >= 0).then_some((source as usize, ev.column))
+      }
+
+    /// Compte les clics rapprochés (simple / double / triple) sur la même
+    /// cellule, dans une fenêtre de 400 ms.
+    fn maj_clic(&mut self, ev: &MouseEvent) -> u8
+      {
+        let maintenant = Instant::now();
+        let compte = compteur_clic(self.derniere_click, self.clic_courant, ev.column, ev.row, maintenant);
+        self.derniere_click = Some((maintenant, ev.column, ev.row));
+        compte
+      }
+
+    /// Démarre une sélection (clic simple : ancre ; double : mot ; triple : ligne).
+    fn debut_selection(&mut self, ev: &MouseEvent)
+      {
+        self.derniere_ligne_souris = ev.row;
+        self.derniere_col_souris = ev.column;
+        let Some((source, col)) = self.coord_source(ev)
+          else
+            {
+              self.selection = None;
+              self.souris_pressee = false;
+              return;
+            };
+        let compte = self.maj_clic(ev);
+        self.clic_courant = compte;
+        self.souris_pressee = true;
+        self.selection_a_glisse = false;
+        self.selection = Some(match compte
+          {
+            2 => {
+              let (debut, fin) = self.term.grid.mot_a(source, col);
+              Selection { ancre: (source, debut), fin: (source, fin.saturating_sub(1)) }
+            }
+            3 => Selection { ancre: (source, 0), fin: (source, self.largeur.saturating_sub(1)) },
+            _ => Selection { ancre: (source, col), fin: (source, col) },
+          });
+      }
+
+    /// Étend la sélection en cours au pointeur (glisser).
+    fn etendre_selection(&mut self, ev: &MouseEvent)
+      {
+        self.derniere_ligne_souris = ev.row;
+        self.derniere_col_souris = ev.column;
+        let Some((source, col)) = self.coord_source(ev)
+          else
+            {
+              return;
+            };
+        if let Some(selection) = self.selection.as_mut()
+          {
+            selection.fin = (source, col);
+            self.selection_a_glisse = true;
+          }
+      }
+
+    /// Finalise la sélection : copie le texte (sauf clic simple sans glisser)
+    /// et conserve le surlignage pour feedback.
+    fn fin_selection(&mut self, terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>) -> Result<()>
+      {
+        self.souris_pressee = false;
+        let copier = self.selection_a_glisse || self.clic_courant >= 2;
+        if copier
+          {
+            if let Some(selection) = self.selection
+              {
+                let (debut, fin) = selection.bornes();
+                let brut = self.term.grid.texte_selection(debut, fin);
+                let texte = if self.config.capture { providers::masquer(&brut) } else { brut };
+                if !texte.is_empty()
+                  {
+                    self.copier_presse_papier(terminal, &texte)?;
+                  }
+              }
+          }
+        else
+          {
+            self.selection = None;
+          }
+        self.selection_a_glisse = false;
+        Ok(())
+      }
+
+    /// Défile automatiquement quand on glisse au-delà du bord haut/bas de la
+    /// zone centrale, en étendant la sélection. Renvoie `true` si la vue a bougé.
+    fn auto_defilement(&mut self) -> bool
+      {
+        if !self.souris_pressee || !self.selection_a_glisse || self.hauteur < 3
+          {
+            return false;
+          }
+        let ligne = self.derniere_ligne_souris;
+        let bas = self.hauteur - 2;
+        let delta = if ligne <= 1
+          {
+            1
+          }
+        else if ligne >= bas
+          {
+            -1
+          }
+        else
+          {
+            return false;
+          };
+        let avant = self.decalage;
+        self.defiler(delta);
+        if self.decalage == avant
+          {
+            return false;
+          }
+        let arriere = self.term.grid.arriere_plan_len() as isize;
+        let base = arriere - self.decalage as isize;
+        let lig = if delta > 0 { 0 } else { (self.hauteur - 3) as isize };
+        if let Some(selection) = self.selection.as_mut()
+          {
+            selection.fin = ((base + lig).max(0) as usize, self.derniere_col_souris);
+          }
+        true
+      }
+
+    /// Copie `texte` dans le presse-papier via OSC 52 et notifie l'utilisateur.
+    fn copier_presse_papier(
+      &mut self,
+      terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>,
+      texte: &str,
+    ) -> Result<()>
+      {
+        let arriere = terminal.backend_mut();
+        arriere.write_all(&encoder_osc52(texte))?;
+        arriere.flush()?;
+        self.presse_papier_interne = Some(texte.to_string());
+        let lignes = texte.lines().count();
+        let message = format!("copié : {lignes} ligne{}", if lignes > 1 { "s" } else { "" });
+        self.notification = Some((message, Instant::now()));
+        Ok(())
+      }
+
+    /// Colle le contenu du presse-papier (clic-milieu) : système d'abord, repli
+    /// sur la copie interne (OSC 52), sinon notification « presse-papier vide ».
+    fn coller_presse_papier(&mut self) -> Result<()>
+      {
+        match texte_a_coller(lire_presse_papier(), self.presse_papier_interne.clone())
+          {
+            Some(texte) => self.coller(&texte)?,
+            None => {
+              self.notification = Some(("presse-papier vide".to_string(), Instant::now()));
+            }
           }
         Ok(())
       }
@@ -925,7 +1121,8 @@ impl App
         Ok(())
       }
 
-    /// Récupère le **mot suivant** de la suggestion (Ctrl+Entrée) : transmet le
+    /// Récupère le **mot suivant** de la suggestion (Ctrl+Entrée, ou Ctrl+→ sur
+    /// les terminaux qui ne distinguent pas Ctrl+Entrée) : transmet le
     /// prochain mot sans valider ni effacer la fin du ghost.
     fn accepter_ghost_mot(&mut self) -> Result<()>
       {
@@ -1054,6 +1251,11 @@ impl App
           String::new(),
           "Alt+Entrée  accepte toute la suggestion (ghost)".to_string(),
           "Ctrl+Entrée accepte le mot suivant de la suggestion".to_string(),
+          "Ctrl+→      idem Ctrl+Entrée (terminaux sans protocole Kitty)".to_string(),
+          String::new(),
+          "molette     défile l'historique de la zone centrale".to_string(),
+          "glisser     sélectionne (double : mot, triple : ligne) et copie".to_string(),
+          "Maj+glisser sélection native du terminal · clic-milieu colle".to_string(),
           String::new(),
           format!("thème   : {}", self.theme.nom),
           format!("capture : {}", if self.config.capture { "on" } else { "off" }),
@@ -1083,6 +1285,7 @@ impl App
           ghost: ghost.unwrap_or_default().chars().collect(),
           decalage: self.decalage,
           overlay_decalage: self.overlay_decalage,
+          selection: self.selection,
           systeme: self.systeme.texte.clone(),
           overlay: self.overlay.as_ref(),
           notification,
@@ -1105,6 +1308,7 @@ struct Vue<'a>
     ghost: Vec<char>,
     decalage: usize,
     overlay_decalage: usize,
+    selection: Option<Selection>,
     systeme: String,
     overlay: Option<&'a Overlay>,
     notification: Option<String>,
@@ -1218,6 +1422,17 @@ impl Vue<'_>
                         continue;
                       }
                     (cellule.c, style_cellule(&cellule))
+                  };
+                let style = if source >= 0
+                  && self
+                    .selection
+                    .is_some_and(|selection| selection.contient(source as usize, col as u16))
+                  {
+                    style.bg(SELECTION_BG)
+                  }
+                  else
+                  {
+                    style
                   };
                 paires.push((caractere, style));
               }
@@ -1381,6 +1596,9 @@ fn spans_depuis_paires(paires: &[(char, Style)], remplacement: Option<&[char]>) 
     spans
   }
 
+/// Fond appliqué aux cellules sélectionnées à la souris.
+const SELECTION_BG: Color = Color::Rgb(0x3A, 0x6E, 0xA5);
+
 /// Style de la suggestion fantôme affichée après le curseur.
 fn style_ghost() -> Style
   {
@@ -1477,6 +1695,40 @@ fn prochain_mot(reste: &str) -> String
     reste[..tete + fin].to_string()
   }
 
+/// Fenêtre maximale entre deux clics pour qu'ils forment un double/triple clic.
+const FENETRE_CLIC: Duration = Duration::from_millis(400);
+
+/// Compte les clics consécutifs (1 → 2 → 3 → 1) : un clic ne compte comme
+/// double/triple que s'il suit le précédent dans [`FENETRE_CLIC`] **et** sur la
+/// même cellule. Renvoie 1 dès que la fenêtre est dépassée ou la cellule change.
+fn compteur_clic(
+  derniere: Option<(Instant, u16, u16)>,
+  clic_courant: u8,
+  col: u16,
+  lig: u16,
+  maintenant: Instant,
+) -> u8
+  {
+    let dans_la_fenetre = matches!(
+      derniere,
+      Some((moment, c, l))
+        if maintenant.saturating_duration_since(moment) < FENETRE_CLIC && c == col && l == lig
+    );
+    if dans_la_fenetre
+      {
+        match clic_courant
+          {
+            0 | 1 => 2,
+            2 => 3,
+            _ => 1,
+          }
+      }
+    else
+      {
+        1
+      }
+  }
+
 /// Encode une touche en octets à transmettre au shell (Alt/Meta, Ctrl, Shift).
 fn encoder_touche(touche: &KeyEvent) -> Vec<u8>
   {
@@ -1540,18 +1792,137 @@ fn bouton_base(bouton: MouseButton) -> u8
       }
   }
 
-/// Bascule de capture souris nécessaire : `None` si l'état est inchangé,
-/// `Some(actif)` (activer/désactiver) sinon.
-fn bascule_capture(avant: bool, apres: bool) -> Option<bool>
+/// Sélection de texte en coordonnées absolues `(source, colonne)`, l'ancre et
+/// l'extrémité étant toutes deux incluses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Selection
   {
-    if avant == apres
+    ancre: (usize, u16),
+    fin: (usize, u16),
+  }
+
+impl Selection
+  {
+    /// Bornes ordonnées `(début, fin)`.
+    fn bornes(&self) -> ((usize, u16), (usize, u16))
       {
-        None
+        if self.ancre <= self.fin
+          {
+            (self.ancre, self.fin)
+          }
+        else
+          {
+            (self.fin, self.ancre)
+          }
+      }
+
+    /// Indique si la cellule `(source, col)` est dans la sélection.
+    fn contient(&self, source: usize, col: u16) -> bool
+      {
+        let (debut, fin) = self.bornes();
+        (source, col) >= debut && (source, col) <= fin
+      }
+  }
+
+/// Encode une sélection en séquence OSC 52 (écriture du presse-papier).
+fn encoder_osc52(texte: &str) -> Vec<u8>
+  {
+    let mut octets = Vec::with_capacity(texte.len() * 4 / 3 + 16);
+    octets.extend_from_slice(b"\x1b]52;c;");
+    octets.extend_from_slice(base64(texte.as_bytes()).as_bytes());
+    octets.extend_from_slice(b"\x1b\\");
+    octets
+  }
+
+/// Encode des octets en base64 (alphabet standard, avec remplissage `=`).
+fn base64(donnees: &[u8]) -> String
+  {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut sortie = String::with_capacity(donnees.len().div_ceil(3) * 4);
+    for bloc in donnees.chunks(3)
+      {
+        let b0 = bloc[0];
+        let b1 = *bloc.get(1).unwrap_or(&0);
+        let b2 = *bloc.get(2).unwrap_or(&0);
+        sortie.push(ALPHABET[(b0 >> 2) as usize] as char);
+        sortie.push(ALPHABET[(((b0 & 0b11) << 4) | (b1 >> 4)) as usize] as char);
+        sortie.push(if bloc.len() > 1 {
+          ALPHABET[(((b1 & 0b1111) << 2) | (b2 >> 6)) as usize] as char
+        } else {
+          '='
+        });
+        sortie.push(if bloc.len() > 2 {
+          ALPHABET[(b2 & 0b11_1111) as usize] as char
+        } else {
+          '='
+        });
+      }
+    sortie
+  }
+
+/// Outils de lecture du presse-papier **système**, par ordre de préférence selon
+/// l'OS. Aucune dépendance de compilation n'est requise : si aucun outil n'est
+/// présent, `lire_presse_papier` renvoie `None` et l'appelant retombe sur le
+/// presse-papier interne (`presse_papier_interne`).
+fn outils_presse_papier() -> &'static [(&'static str, &'static [&'static str])]
+  {
+    if cfg!(target_os = "macos")
+      {
+        &[("pbpaste", &[])]
+      }
+    else if cfg!(target_os = "windows")
+      {
+        &[
+          ("pwsh", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]),
+          ("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]),
+        ]
+      }
+    else if cfg!(target_os = "freebsd")
+      {
+        &[
+          ("pbpaste", &[]),
+          ("xclip", &["-selection", "clipboard", "-o"]),
+          ("xsel", &["-b"]),
+        ]
       }
     else
       {
-        Some(apres)
+        &[
+          ("wl-paste", &["--no-newline"]),
+          ("wl-paste", &["-p", "--no-newline"]),
+          ("xclip", &["-selection", "clipboard", "-o"]),
+          ("xclip", &["-selection", "primary", "-o"]),
+          ("xsel", &["-b"]),
+          ("xsel", &["-p"]),
+        ]
       }
+  }
+
+/// Lit le presse-papier système via le premier outil disponible pour l'OS.
+fn lire_presse_papier() -> Option<String>
+  {
+    for (commande, args) in outils_presse_papier()
+      {
+        if let Ok(sortie) = std::process::Command::new(commande).args(*args).output()
+          && sortie.status.success()
+          {
+            let texte = String::from_utf8_lossy(&sortie.stdout).into_owned();
+            if !texte.is_empty()
+              {
+                return Some(texte);
+              }
+          }
+      }
+    None
+  }
+
+/// Choisit le texte à coller : presse-papier système s'il est non vide, sinon
+/// repli sur la copie interne (OSC 52). `None` si tout est vide.
+fn texte_a_coller(systeme: Option<String>, interne: Option<String>) -> Option<String>
+  {
+    systeme
+      .filter(|texte| !texte.is_empty())
+      .or_else(|| interne.filter(|texte| !texte.is_empty()))
   }
 
 /// Encode un évènement souris selon le protocole demandé par le programme.
@@ -1937,6 +2308,7 @@ mod tests
           ghost: Vec::new(),
           decalage: 0,
           overlay_decalage: 0,
+          selection: None,
           systeme: "IO 0 o/s  Net ↓0 o/s ↑0 o/s  MEM 20%  CPU 5%".to_string(),
           overlay: None,
           notification: None,
@@ -1968,6 +2340,7 @@ mod tests
           ghost: Vec::new(),
           decalage: 0,
           overlay_decalage: 0,
+          selection: None,
           systeme: String::new(),
           overlay: None,
           notification: None,
@@ -2044,6 +2417,55 @@ mod tests
       }
 
     #[test]
+    fn le_compteur_de_clic_distingue_simple_double_triple()
+      {
+        let t0 = Instant::now();
+        assert_eq!(compteur_clic(None, 0, 4, 2, t0), 1);
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 1, 4, 2, t0 + Duration::from_millis(100)), 2);
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 2, 4, 2, t0 + Duration::from_millis(200)), 3);
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 3, 4, 2, t0 + Duration::from_millis(300)), 1);
+      }
+
+    #[test]
+    fn un_clic_trop_tard_redevient_simple()
+      {
+        let t0 = Instant::now();
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 2, 4, 2, t0 + Duration::from_millis(600)), 1);
+      }
+
+    #[test]
+    fn un_clic_dans_une_autre_cellule_redevient_simple()
+      {
+        let t0 = Instant::now();
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 2, 5, 2, t0 + Duration::from_millis(100)), 1);
+        assert_eq!(compteur_clic(Some((t0, 4, 2)), 2, 4, 3, t0 + Duration::from_millis(100)), 1);
+      }
+
+    #[test]
+    fn le_collage_replie_sur_le_presse_papier_interne()
+      {
+        assert_eq!(
+          texte_a_coller(Some("systeme".into()), Some("interne".into())),
+          Some("systeme".into())
+        );
+        assert_eq!(texte_a_coller(None, Some("interne".into())), Some("interne".into()));
+        assert_eq!(texte_a_coller(Some(String::new()), Some("interne".into())), Some("interne".into()));
+        assert_eq!(texte_a_coller(None, None), None);
+        assert_eq!(texte_a_coller(Some(String::new()), Some(String::new())), None);
+      }
+
+    #[test]
+    fn les_outils_presse_papier_dependent_de_l_os()
+      {
+        let outils = outils_presse_papier();
+        assert!(!outils.is_empty(), "au moins un outil de lecture doit être proposé");
+        if cfg!(target_os = "macos") || cfg!(target_os = "freebsd")
+          {
+            assert_eq!(outils[0].0, "pbpaste");
+          }
+      }
+
+    #[test]
     fn la_souris_sgr_suit_le_mode_du_terminal()
       {
         let mut term = Terminal::nouveau(100, 30);
@@ -2089,17 +2511,42 @@ mod tests
       }
 
     #[test]
-    fn bascule_capture_ne_rien_fait_si_l_etat_est_inchange()
+    fn la_selection_normalise_et_teste_l_appartenance()
       {
-        assert_eq!(bascule_capture(false, false), None);
-        assert_eq!(bascule_capture(true, true), None);
+        let s = Selection { ancre: (5, 3), fin: (1, 7) };
+        assert_eq!(s.bornes(), ((1, 7), (5, 3)));
+        assert!(s.contient(3, 0));
+        assert!(s.contient(1, 7));
+        assert!(s.contient(5, 3));
+        assert!(!s.contient(0, 9));
+        assert!(!s.contient(6, 0));
       }
 
     #[test]
-    fn bascule_capture_active_ou_desactive_selon_le_suivi()
+    fn la_selection_a_plat_contient_sa_colonne()
       {
-        assert_eq!(bascule_capture(false, true), Some(true));
-        assert_eq!(bascule_capture(true, false), Some(false));
+        let s = Selection { ancre: (2, 4), fin: (2, 4) };
+        assert!(s.contient(2, 4));
+        assert!(!s.contient(2, 3));
+        assert!(!s.contient(1, 4));
+      }
+
+    #[test]
+    fn l_encodage_osc52_est_bien_forme()
+      {
+        assert_eq!(encoder_osc52("hi"), b"\x1b]52;c;aGk=\x1b\\".to_vec());
+      }
+
+    #[test]
+    fn le_base64_couvre_les_trois_restes()
+      {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
       }
 
     #[test]

@@ -195,13 +195,18 @@ sauf **PagePréc/PageSuiv** qui pilotent le défilement de la zone centrale.
 | `F2`       | Bascule le **mode secret / capture** on/off (session courante, persistable via `bashop capture`). |
 | `Alt+Entrée` | Récupère **toute** la suggestion fantôme (le texte gris après le curseur) et laisse le curseur en fin de ligne, **sans valider**. |
 | `Ctrl+Entrée` | Récupère le **mot suivant** de la suggestion fantôme, curseur après ce mot, **sans valider** et sans effacer la fin du ghost. |
+| `Ctrl+→` | Idem `Ctrl+Entrée` : raccourci de repli pour les terminaux qui ne distinguent pas `Ctrl+Entrée`. |
 
 - **Ghost accepté au clavier** : la suggestion affichée après le curseur peut
-  être reprise progressivement, mot à mot (`Ctrl+Entrée`) ou d'un coup
-  (`Alt+Entrée`). Ces touches étant ambiguës sur les terminaux classiques,
+  être reprise progressivement, mot à mot (`Ctrl+Entrée` ou `Ctrl+→`) ou d'un
+  coup (`Alt+Entrée`). `Ctrl+Entrée` étant ambigu sur les terminaux classiques,
   le **protocole clavier Kitty** (`DISAMBIGUATE_ESCAPE_CODES`) est activé au
-  démarrage en *best-effort* (ignoré par les terminaux qui ne le gèrent pas) ;
-  sans ce protocole, `Ctrl+Entrée` retombe sur `Entrée` et valide la commande.
+  démarrage en *best-effort* (ignoré par les terminaux qui ne le gèrent pas).
+  Les terminaux qui ne l'implémentent pas (ex. Konsole ≤ 25.12) envoient `\r`
+  pour `Ctrl+Entrée` comme pour `Entrée` : `Ctrl+→` (`CSI 1;5C`, distinct sur
+  tous ces terminaux) sert alors de raccourci de repli. `Ctrl+→` n'est
+  intercepté que lorsqu'une suggestion est affichée ; sinon il est transmis au
+  shell (déplacement mot à mot, comportement readline préservé).
 
 - **Historique défilant** : les lignes évincées de la zone centrale sont
   conservées (10 000 lignes max) et redeviennent consultables par le défilement.
@@ -211,16 +216,23 @@ sauf **PagePréc/PageSuiv** qui pilotent le défilement de la zone centrale.
 Les **pop-ups** (F1, F10) recouvrent la **zone centrale** uniquement : les 3
 lignes du cadre (stat, prompt, context) restent visibles.
 
-- **Souris déléguée à la demande** : la souris n'est captée au niveau du
-  terminal que lorsque le programme lancé active le suivi souris
-  (DECSET `1000`/`1002`/`1003` ; encodage `1006`/`1015`), auquel cas les
-  événements souris lui sont **transmis**. Sinon la capture est relâchée : le
-  terminal conserve sa **sélection** et son **copier-coller natifs**.
-- **Molette = affichage, jamais l'historique** : le défilement alterné
-  (`DECSET 1007`) est désactivé au démarrage (rétabli à la sortie, *best-effort*)
-  afin que la molette ne soit plus traduite en `↑`/`↓` — ce qui rappelait
-  l'historique du shell au prompt. Le défilement de la zone centrale se fait avec
-  `PagePréc`/`PageSuiv`.
+- **Souris captée en permanence** : au démarrage, Bashop active le suivi
+  bouton + glisser + SGR (`DECSET 1000`/`1002`/`1006`, sans `1003`) et gère
+  lui-même la souris. Si le programme lancé réclame le suivi souris
+  (`1000`/`1002`/`1003`), les évènements lui sont **transmis** (encodage
+  `1006`/`1015`) ; sinon Bashop les exploite.
+- **Molette = scrollback** : la molette fait défiler la zone centrale (historique
+  défilant, 10 000 lignes), jamais l'historique du shell — le défilement alterné
+  (`DECSET 1007`) est désactivé (rétabli à la sortie, *best-effort*).
+- **Sélection et copie internes** : glisser gauche sélectionne (double-clic :
+  mot, triple-clic : ligne, avec auto-défilement aux bords) ; le texte est copié
+  dans le presse-papier via **OSC 52** ; un retour « copié : N lignes » s'affiche
+  dans la ligne de contexte. Le clic-milieu colle le presse-papier système
+  (`wl-paste`/`xclip`/`xsel` sous Linux, `pbpaste` sous macOS/FreeBSD,
+  `Get-Clipboard` sous Windows) et, à défaut, la dernière copie interne ;
+  si rien n'est disponible, une notification « presse-papier vide » s'affiche.
+  La sélection native de l'hôte reste accessible en maintenant `Maj`
+  (convention kitty/xterm).
 - **Écran alterné** : `DECSET 1049` sauvegarde grille et curseur et les
   restaure à la sortie (le scrollback survit à `vim`/`less`).
 

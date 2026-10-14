@@ -74,17 +74,20 @@ pub const WHEEL: Theme =
     fond: Rgb::new(0x2E, 0x34, 0x40),
   };
 
-/// Thème root (superutilisateur) : fond rouge sombre pour signaler le danger.
+/// Thème root (superutilisateur) : fond rouge vif pour signaler le danger.
 pub const ROOT: Theme =
   Theme {
     nom: "root",
     accent: Rgb::new(0xF3, 0x8B, 0xA8),
     suffixe: Suffixe { glyphe: "###>", couleur: Rgb::new(0xF3, 0x8B, 0xA8) },
-    fond: Rgb::new(0x5A, 0x23, 0x23),
+    fond: Rgb::new(0xDD, 0x00, 0x00),
   };
 
 /// Texte par défaut des lignes `term_stat` et `term_context`.
 pub const TEXTE_CADRE: Rgb = Rgb::new(0xE6, 0xED, 0xF3);
+/// Texte des lignes `term_stat` et `term_context` en thème `root` : éclairci
+/// pour tenir le contraste AA (≥ 4,5) sur le fond rouge `ROOT.fond`.
+pub const TEXTE_CADRE_ROOT: Rgb = Rgb::new(0xEC, 0xF0, 0xF5);
 /// Fond par défaut du cadre (`term_stat`, `term_context`, prompt).
 pub const FOND_CADRE: Rgb = Rgb::new(0x2E, 0x34, 0x40);
 /// Couleur par défaut du chemin dans le prompt.
@@ -236,9 +239,9 @@ pub fn palette(theme: &Theme, surcharge: &Surcharge) -> Palette
     if theme.nom == "root"
       {
         return Palette {
-          stat_fg: TEXTE_CADRE,
+          stat_fg: TEXTE_CADRE_ROOT,
           stat_bg: ROOT.fond,
-          contexte_fg: TEXTE_CADRE,
+          contexte_fg: TEXTE_CADRE_ROOT,
           contexte_bg: ROOT.fond,
           prompt_fg: ROOT.accent,
           prompt_bg: ROOT.fond,
@@ -393,6 +396,37 @@ mod tests
         assert_eq!(p.stat_bg, ROOT.fond, "root garde son fond rouge");
         assert_eq!(p.prompt_fg, ROOT.accent, "root garde son accent");
         assert_eq!(p.prompt_bg, ROOT.fond);
+      }
+
+    #[test]
+    fn le_texte_du_cadre_root_atteint_le_contraste_aa()
+      {
+        fn luminance(c: Rgb) -> f64
+          {
+            fn canal(v: u8) -> f64
+              {
+                let x = f64::from(v) / 255.0;
+                if x <= 0.03928
+                  {
+                    x / 12.92
+                  }
+                else
+                  {
+                    ((x + 0.055) / 1.055).powf(2.4)
+                  }
+              }
+            0.2126 * canal(c.r) + 0.7152 * canal(c.g) + 0.0722 * canal(c.b)
+          }
+        fn contraste(a: Rgb, b: Rgb) -> f64
+          {
+            let (l1, l2) = (luminance(a), luminance(b));
+            let (haut, bas) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+            (haut + 0.05) / (bas + 0.05)
+          }
+        let p = palette(&ROOT, &Surcharge::default());
+        let ratio = contraste(p.stat_fg, p.stat_bg);
+        assert!(ratio >= 4.5, "contraste AA (≥ 4,5) requis, obtenu {ratio:.2}");
+        assert_eq!(p.contexte_fg, p.stat_fg, "les deux lignes du cadre partagent le texte");
       }
 
     #[test]

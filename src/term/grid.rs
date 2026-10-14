@@ -216,6 +216,88 @@ impl Grid
         texte
       }
 
+    /// Lit une cellule par index absolu « source » : d'abord l'historique
+    /// défilant (`0..arriere_plan_len`), puis la grille visible. Hors bornes,
+    /// renvoie une cellule vide.
+    pub fn cellule_source(&self, source: usize, col: u16) -> Cellule
+      {
+        if col >= self.largeur
+          {
+            return Cellule::default();
+          }
+        let arriere = self.arriere_plan.len();
+        if source < arriere
+          {
+            self.arriere_plan[source].get(col as usize).copied().unwrap_or_default()
+          }
+        else
+          {
+            self.cellule((source - arriere) as u16, col)
+          }
+      }
+
+    /// Texte d'une sélection exprimée en coordonnées absolues `(source, col)`.
+    /// Les lignes sélectionnées sont jointes par `\n`, les caractères de
+    /// continuation sont ignorés et les espaces de fin de ligne sont rognés.
+    pub fn texte_selection(&self, debut: (usize, u16), fin: (usize, u16)) -> String
+      {
+        let (mut s0, mut c0) = debut;
+        let (mut s1, mut c1) = fin;
+        if (s0, c0) > (s1, c1)
+          {
+            std::mem::swap(&mut s0, &mut s1);
+            std::mem::swap(&mut c0, &mut c1);
+          }
+        let derniere_col = self.largeur.saturating_sub(1);
+        let mut lignes: Vec<String> = Vec::new();
+        for source in s0..=s1
+          {
+            let col_debut = if source == s0 { c0 } else { 0 };
+            let col_fin = if source == s1 { c1 } else { derniere_col };
+            let mut texte = String::new();
+            let mut col = col_debut;
+            while col <= col_fin && col <= derniere_col
+              {
+                let cellule = self.cellule_source(source, col);
+                if !cellule.continuation
+                  {
+                    texte.push(cellule.c);
+                  }
+                col += 1;
+              }
+            lignes.push(texte.trim_end().to_string());
+          }
+        lignes.join("\n")
+      }
+
+    /// Étendue du « mot » contenant la colonne `col` sur la ligne `source`,
+    /// sous forme `(début inclus, fin exclue)`. Un caractère non-mot isole la
+    /// colonne elle-même ; les caractères de continuation sont traités comme
+    /// appartenant au mot.
+    pub fn mot_a(&self, source: usize, col: u16) -> (u16, u16)
+      {
+        let est_mot = |cellule: Cellule| {
+          cellule.continuation
+            || cellule.c.is_alphanumeric()
+            || matches!(cellule.c, '_' | '-' | '.' | '/' | '~' | ':' | '@' | '+' | '=')
+        };
+        if !est_mot(self.cellule_source(source, col))
+          {
+            return (col, (col + 1).min(self.largeur.max(1)));
+          }
+        let mut debut = col;
+        while debut > 0 && est_mot(self.cellule_source(source, debut - 1))
+          {
+            debut -= 1;
+          }
+        let mut fin = col + 1;
+        while fin < self.largeur && est_mot(self.cellule_source(source, fin))
+          {
+            fin += 1;
+          }
+        (debut, fin)
+      }
+
     /// Fait défiler la grille d'une ligne vers le haut.
     pub fn defiler_haut(&mut self)
       {
@@ -336,5 +418,75 @@ mod tests
         grille.redimensionner(6, 3);
         assert_eq!(grille.largeur, 6);
         assert_eq!(grille.texte_ligne(0), "A     ");
+      }
+
+    fn ecrire(grille: &mut Grid, lig: u16, texte: &str)
+      {
+        for (col, c) in texte.chars().enumerate()
+          {
+            grille.poser(lig, col as u16, Cellule { c, ..Cellule::default() });
+          }
+      }
+
+    #[test]
+    fn la_selection_extrait_des_lignes_entieres()
+      {
+        let mut grille = Grid::nouvelle(8, 2);
+        ecrire(&mut grille, 0, "abc");
+        ecrire(&mut grille, 1, "de");
+        assert_eq!(grille.texte_selection((0, 0), (1, 7)), "abc\nde");
+      }
+
+    #[test]
+    fn la_selection_borne_les_colonnes()
+      {
+        let mut grille = Grid::nouvelle(8, 1);
+        ecrire(&mut grille, 0, "abcdef");
+        assert_eq!(grille.texte_selection((0, 1), (0, 3)), "bcd");
+      }
+
+    #[test]
+    fn la_selection_normalise_l_ordre_des_bornes()
+      {
+        let mut grille = Grid::nouvelle(8, 1);
+        ecrire(&mut grille, 0, "abcdef");
+        assert_eq!(grille.texte_selection((0, 3), (0, 1)), "bcd");
+      }
+
+    #[test]
+    fn la_selection_traverse_l_arriere_plan()
+      {
+        let mut grille = Grid::nouvelle(6, 1);
+        ecrire(&mut grille, 0, "haut");
+        grille.defiler_haut();
+        ecrire(&mut grille, 0, "bas");
+        assert_eq!(grille.texte_selection((0, 0), (1, 5)), "haut\nbas");
+      }
+
+    #[test]
+    fn la_selection_ignore_les_continuations_de_largeur_deux()
+      {
+        let mut grille = Grid::nouvelle(4, 1);
+        grille.poser(0, 0, Cellule { c: '你', ..Cellule::default() });
+        grille.poser(0, 1, Cellule { continuation: true, ..Cellule::default() });
+        grille.poser(0, 2, Cellule { c: 'x', ..Cellule::default() });
+        assert_eq!(grille.texte_selection((0, 0), (0, 3)), "你x");
+      }
+
+    #[test]
+    fn le_mot_couvre_les_caracteres_contigus()
+      {
+        let mut grille = Grid::nouvelle(12, 1);
+        ecrire(&mut grille, 0, "ls -l /tmp/x");
+        assert_eq!(grille.mot_a(0, 4), (3, 5));
+        assert_eq!(grille.mot_a(0, 7), (6, 12));
+      }
+
+    #[test]
+    fn un_caractere_isole_n_est_pas_un_mot()
+      {
+        let mut grille = Grid::nouvelle(6, 1);
+        ecrire(&mut grille, 0, "a b");
+        assert_eq!(grille.mot_a(0, 1), (1, 2));
       }
   }
