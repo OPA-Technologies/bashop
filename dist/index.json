@@ -1,9 +1,9 @@
 {
   "name": "bashop",
-  "version": "0.5.1",
+  "version": "0.5.3",
   "assets": [
-    { "os": "freebsd", "arch": "x86_64", "version": "0.5.1", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.1/bashop-0.5.1-freebsd-x86_64.tar.gz", "sha256": "af73959a5c494bfa99282a99e587abfe02fb8fe05fdba5275169b80ac70db126" },
-    { "os": "linux", "arch": "x86_64", "version": "0.5.1", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.1/bashop-0.5.1-linux-x86_64-musl.tar.gz", "sha256": "d59182e31bd2abc4cd3fa6bff049cdb8c2c43f54991dcd028e60943ebf447669" },
-    { "os": "linux", "arch": "x86_64", "version": "0.5.1", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.1/bashop-0.5.1-linux-x86_64.tar.gz", "sha256": "80ca905860d10b20247680eaddaed43b3104f127d41437c13bebc95df4ac6cd4" }
+    { "os": "freebsd", "arch": "x86_64", "version": "0.5.3", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.3/bashop-0.5.3-freebsd-x86_64.tar.gz", "sha256": "96be4417f338e33ef998e72840639e7e877a4b5cf08af60ea2d3ea4ca4852a17" },
+    { "os": "linux", "arch": "x86_64", "version": "0.5.3", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.3/bashop-0.5.3-linux-x86_64-musl.tar.gz", "sha256": "cc717eaddf914024f78fdce7e1d46f48c931d9273ea933d6081120be5b79d4af" },
+    { "os": "linux", "arch": "x86_64", "version": "0.5.3", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.3/bashop-0.5.3-linux-x86_64.tar.gz", "sha256": "67a18b4cdb40068d4e1d06d0b3c7b15631ffd92256e5701da9bba18b1f388d18" }
   ]
 }
