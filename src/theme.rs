@@ -80,7 +80,7 @@ pub const ROOT: Theme =
     nom: "root",
     accent: Rgb::new(0xF3, 0x8B, 0xA8),
     suffixe: Suffixe { glyphe: "###>", couleur: Rgb::new(0xF3, 0x8B, 0xA8) },
-    fond: Rgb::new(0x99, 0x00, 0x00),
+    fond: Rgb::new(0x80, 0x00, 0x00),
   };
 
 /// Texte par défaut des lignes `term_stat` et `term_context`.
