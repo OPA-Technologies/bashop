@@ -74,13 +74,13 @@ pub const WHEEL: Theme =
     fond: Rgb::new(0x2E, 0x34, 0x40),
   };
 
-/// Thème root (superutilisateur) : fond rouge vif pour signaler le danger.
+/// Thème root (superutilisateur) : fond rouge foncé pour signaler le danger.
 pub const ROOT: Theme =
   Theme {
     nom: "root",
     accent: Rgb::new(0xF3, 0x8B, 0xA8),
     suffixe: Suffixe { glyphe: "###>", couleur: Rgb::new(0xF3, 0x8B, 0xA8) },
-    fond: Rgb::new(0xDD, 0x00, 0x00),
+    fond: Rgb::new(0x99, 0x00, 0x00),
   };
 
 /// Texte par défaut des lignes `term_stat` et `term_context`.

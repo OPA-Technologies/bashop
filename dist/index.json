@@ -3,9 +3,9 @@
   "version": "0.5.4",
   "assets": [
     { "os": "freebsd", "arch": "x86_64", "version": "0.5.4", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-freebsd-x86_64.tar.gz", "sha256": "4411b862f3f6bc5e9ea3fffd2c44c90749bc97ede748d7dc499781b145b104cd" },
-    { "os": "linux", "arch": "armv7", "version": "0.5.4", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-armv7-musl.tar.gz", "sha256": "77ce820d1c71e783a904b34ea3499e49792a7e95165f9423ddee7a4b465c9f5d" },
-    { "os": "linux", "arch": "x86_64", "version": "0.5.4", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-x86_64-musl.tar.gz", "sha256": "9459fe47f6072d15c8d2d850b2f1cdece7b9042a040b2b854c1fd9f41d58fca1" },
-    { "os": "linux", "arch": "x86_64", "version": "0.5.4", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-x86_64.tar.gz", "sha256": "f3f042850233933e055a38c33040b116a877239144c883cd81adcf68f3f36253" },
+    { "os": "linux", "arch": "armv7", "version": "0.5.4", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-armv7-musl.tar.gz", "sha256": "37d496516a5b8df80c62f77ddb29ee5503cbd2ed848a2bd7c2f23649330b0e12" },
+    { "os": "linux", "arch": "x86_64", "version": "0.5.4", "variante": "musl", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-x86_64-musl.tar.gz", "sha256": "855e9287dc7b1012937f70f50bafe2f60de23690a780af3d5580dfa5dd434350" },
+    { "os": "linux", "arch": "x86_64", "version": "0.5.4", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-linux-x86_64.tar.gz", "sha256": "fc9209f3811427f40cc1f590761fd640dc82eb36499c8d2eca2fe516ffd9c3ef" },
     { "os": "windows", "arch": "x86_64", "version": "0.5.4", "variante": "", "url": "https://github.com/OPA-Technologies/bashop/releases/download/v0.5.4/bashop-0.5.4-windows-x86_64.zip", "sha256": "ac92a00dd58d2d7e80f94398a4fc8a3c21fc08e782ddc5249fe57b388a996b00" }
   ]
 }
