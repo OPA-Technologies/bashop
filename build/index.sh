@@ -19,7 +19,7 @@ BASE_URL="${BASHOP_BASE_URL:-https://github.com/OPA-Technologies/bashop/releases
 VERSION="$(awk -F' +' '/^version *=/{print $3; exit}' "$ROOT/Cargo.toml" | tr -d '"')"
 
 shopt -s nullglob
-archives=("$DIST"/bashop-*.tar.gz)
+archives=("$DIST"/bashop-*.tar.gz "$DIST"/bashop-*.zip)
 if [ "${#archives[@]}" -eq 0 ]
   then
     printf 'Aucune archive dans %s (lancer build-release.sh d abord).\n' "$DIST" >&2
@@ -35,9 +35,10 @@ if [ "${#archives[@]}" -eq 0 ]
   for archive in "${archives[@]}"
     do
       base="$(basename "$archive")"
-      # bashop-<version>-<os>-<arch>[-<variante>].tar.gz
+      # bashop-<version>-<os>-<arch>[-<variante>].tar.gz|.zip
       reste="${base#bashop-}"
       sans_ext="${reste%.tar.gz}"
+      sans_ext="${sans_ext%.zip}"
       v="${sans_ext%%-*}"
       reste2="${sans_ext#*-}"
       os="${reste2%%-*}"

@@ -143,6 +143,163 @@ pub const MARQUE_DEBUT: &str = "# >>> bashop >>>";
 /// Marqueur de fin du bloc injecté dans les rc (`bashop install`).
 pub const MARQUE_FIN: &str = "# <<< bashop <<<";
 
+/// SGR PowerShell `$e[<intensité>;38;2;fg;48;2;fond m` (via la variable `$e`).
+fn couleur_ps(rgb: (u8, u8, u8), gras: bool, fond: (u8, u8, u8)) -> String
+  {
+    let intensite = if gras { 1 } else { 0 };
+    format!(
+      "$e[{};38;2;{};{};{};48;2;{};{};{}m",
+      intensite, rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+/// SGR PowerShell `$e[3;38;2;fg;48;2;fond m` (italique, fond du cadre).
+fn couleur_italique_ps(rgb: (u8, u8, u8), fond: (u8, u8, u8)) -> String
+  {
+    format!(
+      "$e[3;38;2;{};{};{};48;2;{};{};{}m",
+      rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+/// SGR PowerShell `$e[48;2;fond m` (fond du cadre seul).
+fn fond_ps(fond: (u8, u8, u8)) -> String
+  {
+    format!("$e[48;2;{};{};{}m", fond.0, fond.1, fond.2)
+  }
+
+/// SGR cmd `$E[...m` (le code d'échappement de `PROMPT` est `$E`).
+fn couleur_cmd(rgb: (u8, u8, u8), gras: bool, fond: (u8, u8, u8)) -> String
+  {
+    let intensite = if gras { 1 } else { 0 };
+    format!(
+      "$E[{};38;2;{};{};{};48;2;{};{};{}m",
+      intensite, rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+/// SGR cmd `$E[3;38;2;fg;48;2;fond m` (italique, fond du cadre).
+fn couleur_italique_cmd(rgb: (u8, u8, u8), fond: (u8, u8, u8)) -> String
+  {
+    format!(
+      "$E[3;38;2;{};{};{};48;2;{};{};{}m",
+      rgb.0, rgb.1, rgb.2, fond.0, fond.1, fond.2
+    )
+  }
+
+/// SGR cmd `$E[48;2;fond m` (fond du cadre seul).
+fn fond_cmd(fond: (u8, u8, u8)) -> String
+  {
+    format!("$E[48;2;{};{};{}m", fond.0, fond.1, fond.2)
+  }
+
+/// Échappe une chaîne pour un littéral PowerShell entre guillemets simples.
+fn echapper_simple(valeur: &str) -> String
+  {
+    valeur.replace('\'', "''")
+  }
+
+/// Corps de la fonction `prompt` PowerShell : épinglage, marqueurs `OSC 133`,
+/// identité, chemin et suffixe. Renvoie l'expression de la chaîne retournée.
+///
+/// Le script définit `$e` (ESC) et `$__bashop_suffixe` ; la fonction calcule
+/// `$code` (statut de la commande précédente), `$h` (hauteur de la zone shell),
+/// `$heure`, `$hist` (numéro d'historique) et `$chemin`.
+fn corps_prompt_powershell(palette: &Palette) -> String
+  {
+    let accent = palette.prompt_fg.tuple();
+    let fond = palette.prompt_bg.tuple();
+    format!(
+      "$e]133;D;$code$e\\$e]1337;Bashop;user=$bh_user;priv=$bh_priv$e\\$e[$h;1H$e[K{fond}$e]133;A$e\\{heure}$heure{ra} {hist}$hist{ra} {accent}$bh_user@$env:COMPUTERNAME{ra} {chemin}$chemin{ra} {accent}$__bashop_suffixe{reinit}$e]133;B$e\\",
+      fond = fond_ps(fond),
+      heure = couleur_italique_ps(palette.prompt_heure.tuple(), fond),
+      ra = "$e[39m$e[22m$e[23m",
+      hist = couleur_italique_ps(palette.prompt_historique.tuple(), fond),
+      accent = couleur_ps(accent, true, fond),
+      chemin = couleur_ps(palette.prompt_chemin.tuple(), false, fond),
+      reinit = "$e[0m",
+    )
+  }
+
+/// Définition complète de la fonction `prompt` PowerShell (partie commune au
+/// profil généré et à `bashop prompt`). Ne lit **pas** les profils.
+pub fn script_prompt_powershell(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
+  {
+    let mut s = String::new();
+    s.push_str("$e = [char]27\n");
+    s.push_str(&format!(
+      "$global:__bashop_suffixe = '{}'\n",
+      echapper_simple(&suffixe_cadre(glyphe, largeur_suffixe))
+    ));
+    s.push_str("$global:__bashop_user = if ($env:USERNAME) { $env:USERNAME } else { $env:USER }\n");
+    s.push_str("$global:__bashop_priv = 'classique'\n");
+    s.push_str("try\n{\n");
+    s.push_str("  $pr = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())\n");
+    s.push_str("  if ($pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { $global:__bashop_priv = 'root' }\n");
+    s.push_str("}\ncatch {}\n");
+    s.push_str("function global:prompt\n{\n");
+    s.push_str("  $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }\n");
+    s.push_str("  $h = $Host.UI.RawUI.WindowSize.Height\n");
+    s.push_str("  $heure = (Get-Date).ToString('HH:mm:ss')\n");
+    s.push_str("  $hist = '({0,3})' -f (Get-History).Count\n");
+    s.push_str("  $chemin = $PWD.Path\n");
+    s.push_str("  $bh_user = $global:__bashop_user\n");
+    s.push_str("  $bh_priv = $global:__bashop_priv\n");
+    s.push_str("  $vide = ''\n");
+    if ligne_vide
+      {
+        s.push_str("  if ($global:__bashop_vide) { $vide = \"`n\" }\n");
+        s.push_str("  $global:__bashop_vide = $true\n");
+      }
+    s.push_str(&format!(
+      "  return $vide + \"{}\"\n",
+      corps_prompt_powershell(palette)
+    ));
+    s.push_str("}\n");
+    s
+  }
+
+/// Contenu du profil PowerShell temporaire (`-NoProfile` + `-Command ". <fichier>"`).
+///
+/// Lit d'abord les profils réels de l'utilisateur (`$PROFILE`) puis pose la
+/// fonction `prompt` Bashop, qui neutralise tout prompt issu de ces profils.
+pub fn profil_powershell(palette: &Palette, glyphe: &str, largeur_suffixe: u16, ligne_vide: bool) -> String
+  {
+    let mut s = String::from("# Généré par Bashop. Ne pas éditer à la main.\n");
+    s.push_str("foreach ($p in @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost))\n");
+    s.push_str("{\n  if ($p -and (Test-Path $p)) { . $p }\n}\n");
+    s.push_str(&script_prompt_powershell(palette, glyphe, largeur_suffixe, ligne_vide));
+    s
+  }
+
+/// Valeur de la variable `PROMPT` de cmd.exe pour un thème donné.
+///
+/// `hauteur` fixe la ligne d'épinglage (dernière ligne de la zone shell) quand
+/// elle est connue (lancement par `bashop run`) ; sinon (installation via
+/// `AutoRun`) l'épinglage est omis. cmd ne fournit ni numéro d'historique ni
+/// statut de commande : seuls les marqueurs `OSC 133;A`/`133;B` sont émis.
+pub fn prompt_cmd(palette: &Palette, glyphe: &str, largeur_suffixe: u16, hauteur: Option<u16>) -> String
+  {
+    let accent = palette.prompt_fg.tuple();
+    let fond = palette.prompt_bg.tuple();
+    let pin = match hauteur
+      {
+        Some(hauteur) => format!("$E[{hauteur};1H$E[K"),
+        None => String::new(),
+      };
+    format!(
+      "{pin}{fond}$E]133;A$E\\{heure}$T{ra} {accent}%USERNAME%@%COMPUTERNAME%{ra} {chemin}$P{ra} {accent}{suffixe}{reinit}$E]133;B$E\\",
+      pin = pin,
+      fond = fond_cmd(fond),
+      heure = couleur_italique_cmd(palette.prompt_heure.tuple(), fond),
+      ra = "$E[39m$E[22m$E[23m",
+      accent = couleur_cmd(accent, true, fond),
+      chemin = couleur_cmd(palette.prompt_chemin.tuple(), false, fond),
+      suffixe = suffixe_cadre(glyphe, largeur_suffixe),
+      reinit = "$E[0m",
+    )
+  }
+
 /// Calcule (une fois) l'identité et le privilège du shell courant. Ces valeurs
 /// ne changent qu'à l'ouverture d'un nouveau shell (donc d'une nouvelle
 /// session sous `sudo -i`), jamais pendant la vie d'un prompt.
@@ -316,6 +473,19 @@ pub fn bloc_zsh() -> String
     )
   }
 
+/// Bloc d'activation idempotent pour le profil PowerShell de l'utilisateur
+/// (`bashop install --shell powershell`). Voir [`bloc_bash`] pour la branche
+/// « cadre déjà actif ». PowerShell n'a pas d'`exec` : après la sortie du cadre,
+/// le shell est fermé (`exit`) pour ne pas laisser une session sans cadre.
+pub fn bloc_powershell() -> String
+  {
+    format!(
+      "{debut}\nif (-not $env:BASHOP_ACTIVE -and -not $env:BASHOP_DISABLE)\n{{\n  if (Get-Command bashop -ErrorAction SilentlyContinue)\n  {{\n    & bashop _guard\n    if ($LASTEXITCODE -eq 0)\n    {{\n      & bashop run --shell powershell\n      exit\n    }}\n    else\n    {{\n      & bashop _nested\n      if ($LASTEXITCODE -eq 0)\n      {{\n        & bashop prompt --shell powershell | Invoke-Expression\n      }}\n    }}\n  }}\n}}\n{fin}\n",
+      debut = MARQUE_DEBUT,
+      fin = MARQUE_FIN,
+    )
+  }
+
 /// Bloc **système** (`bashop install --system`) à déposer sous
 /// `/etc/profile.d/bashop.sh` (Linux). Il rend le prompt Bashop disponible au
 /// shell de connexion **root** déclenché par `sudo -i` : l'environnement est
@@ -335,7 +505,7 @@ pub fn bloc_systeme() -> String
 /// Indique si un fichier de démarrage est généré pour ce shell.
 pub fn supporte(shell: Shell) -> bool
   {
-    matches!(shell, Shell::Bash | Shell::Zsh)
+    matches!(shell, Shell::Bash | Shell::Zsh | Shell::PowerShell | Shell::Cmd)
   }
 
 #[cfg(test)]
@@ -540,5 +710,50 @@ mod tests
         assert!(script.contains("__bashop_precmd()"));
         assert!(script.contains("precmd_functions"));
         assert!(script.contains("PROMPT="));
+      }
+
+    #[test]
+    fn le_script_prompt_powershell_publie_les_marqueurs_et_le_suffixe()
+      {
+        let script = script_prompt_powershell(&p(), ">>", 6, true);
+        assert!(script.contains("function global:prompt"));
+        assert!(script.contains("133;A"), "marqueur de prompt absent : {script}");
+        assert!(script.contains("133;B"), "marqueur de commande absent : {script}");
+        assert!(script.contains("133;D"), "marqueur de fin absent : {script}");
+        assert!(script.contains("1337;Bashop"), "publication du privilège absente : {script}");
+        assert!(script.contains("$e[$h;1H$e[K"), "épinglage absent : {script}");
+        assert!(script.contains("$__bashop_suffixe"));
+      }
+
+    #[test]
+    fn le_profil_powershell_lit_les_profils_puis_pose_prompt()
+      {
+        let profil = profil_powershell(&p(), ">>", 6, true);
+        assert!(profil.contains("$PROFILE"), "les profils réels doivent être lus : {profil}");
+        let lecture = profil.find("$PROFILE.CurrentUserCurrentHost").expect("profil");
+        let prompt = profil.find("function global:prompt").expect("prompt");
+        assert!(lecture < prompt, "le prompt doit être posé après les profils");
+      }
+
+    #[test]
+    fn le_bloc_powershell_est_encadre_et_relance_le_cadre()
+      {
+        let bloc = bloc_powershell();
+        assert!(bloc.starts_with(MARQUE_DEBUT));
+        assert!(bloc.trim_end().ends_with(MARQUE_FIN));
+        assert!(bloc.contains("bashop _guard"));
+        assert!(bloc.contains("bashop run --shell powershell"));
+        assert!(bloc.contains("BASHOP_DISABLE"));
+      }
+
+    #[test]
+    fn le_prompt_cmd_epingle_quand_la_hauteur_est_connue()
+      {
+        let avec = prompt_cmd(&p(), ">>", 6, Some(30));
+        assert!(avec.contains("$E[30;1H"), "épinglage cmd absent : {avec}");
+        assert!(avec.contains("133;A") && avec.contains("133;B"));
+        let sans = prompt_cmd(&p(), ">>", 6, None);
+        assert!(!sans.contains(";1H"), "l'épinglage doit être omis : {sans}");
+        assert!(sans.contains("$P"), "le chemin cmd ($P) doit être présent");
       }
   }

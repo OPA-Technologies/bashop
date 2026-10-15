@@ -17,6 +17,25 @@ pub enum Demarrage
 /// Nom du binaire recherché dans la chaîne des ancêtres.
 const PROGRAMME: &str = "bashop";
 
+/// Dossier personnel de l'utilisateur.
+///
+/// `HOME` d'abord (Unix, et aussi Git Bash/sous-systèmes Windows qui le
+/// définissent), puis `USERPROFILE` (Windows natif). Renvoie `None` si aucun
+/// n'est défini.
+pub fn dossier_utilisateur() -> Option<std::path::PathBuf>
+  {
+    for variable in ["HOME", "USERPROFILE"]
+      {
+        if let Some(chemin) = std::env::var_os(variable)
+          .filter(|valeur| !valeur.is_empty())
+          .map(std::path::PathBuf::from)
+          {
+            return Some(chemin);
+          }
+      }
+    None
+  }
+
 /// Indique si l'environnement porte le marqueur d'activation.
 pub fn deja_actif() -> bool
   {

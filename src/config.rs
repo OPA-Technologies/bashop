@@ -72,9 +72,9 @@ impl Default for Config
 /// Charge `~/.opshellrc` (repli sur les valeurs par défaut).
 pub fn charger() -> Config
   {
-    if let Some(home) = std::env::var_os("HOME")
+    if let Some(home) = crate::detect::dossier_utilisateur()
       {
-        let chemin = std::path::Path::new(&home).join(".opshellrc");
+        let chemin = home.join(".opshellrc");
         if let Ok(contenu) = std::fs::read_to_string(&chemin)
           {
             return analyser(&contenu);
@@ -126,8 +126,9 @@ pub fn format_couleur(couleur: Rgb) -> String
 /// toutes les autres lignes (commentaires, clés inconnues, autres réglages).
 pub fn fixer_capture(actif: bool) -> std::io::Result<()>
   {
-    let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME absent"))?;
-    fixer_capture_dans(PathBuf::from(home).join(".opshellrc"), actif)
+    let home = crate::detect::dossier_utilisateur()
+      .ok_or_else(|| std::io::Error::other("dossier utilisateur absent"))?;
+    fixer_capture_dans(home.join(".opshellrc"), actif)
   }
 
 /// Contenu canonique de `~/.opshellrc` pour une configuration : les clés
@@ -181,8 +182,9 @@ pub fn assembler(config: &Config) -> String
 /// inconnues (voir [`assembler`]).
 pub fn ecrire(config: &Config) -> std::io::Result<PathBuf>
   {
-    let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME absent"))?;
-    let chemin = PathBuf::from(home).join(".opshellrc");
+    let home = crate::detect::dossier_utilisateur()
+      .ok_or_else(|| std::io::Error::other("dossier utilisateur absent"))?;
+    let chemin = home.join(".opshellrc");
     ecrire_dans(&chemin, config)?;
     Ok(chemin)
   }

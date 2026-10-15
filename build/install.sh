@@ -166,21 +166,43 @@ main()
         url="$(printf '%s\n' "$choisi" | sed -n 1p)"
         sha="$(printf '%s\n' "$choisi" | sed -n 2p)"
         info "téléchargement : $url"
-        telecharger "$url" "$tmp/archive.tar.gz"
-        [ -n "$sha" ] && verifier_sha256 "$tmp/archive.tar.gz" "$sha"
-        tar -xzf "$tmp/archive.tar.gz" -C "$tmp"
-        binaire="$tmp/bashop"
-        [ -f "$binaire" ] || binaire="$(find "$tmp" -name bashop -type f | head -n1)"
+        case "$url" in
+          *.zip) archive="$tmp/archive.zip" ;;
+          *) archive="$tmp/archive.tar.gz" ;;
+        esac
+        telecharger "$url" "$archive"
+        [ -n "$sha" ] && verifier_sha256 "$archive" "$sha"
+        if [ "${archive##*.}" = "zip" ]
+          then
+            if command -v unzip >/dev/null 2>&1
+              then
+                unzip -q "$archive" -d "$tmp"
+              elif command -v powershell >/dev/null 2>&1
+                then
+                  powershell -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$tmp' -Force"
+              else
+                erreur "unzip (ou powershell) est requis pour extraire une archive Windows."
+              fi
+          else
+            tar -xzf "$archive" -C "$tmp"
+          fi
+        binaire="$(find "$tmp" \( -name bashop -o -name bashop.exe \) -type f 2>/dev/null | head -n1)"
         [ -n "$binaire" ] && [ -f "$binaire" ] || erreur "binaire absent de l'archive."
       fi
 
+    if [ "$os" = "windows" ]
+      then
+        cible="$PREFIX/bin/bashop.exe"
+      else
+        cible="$PREFIX/bin/bashop"
+      fi
     mkdir -p "$PREFIX/bin"
-    install -m 0755 "$binaire" "$PREFIX/bin/bashop" 2>/dev/null \
-      || { cp "$binaire" "$PREFIX/bin/bashop" && chmod 0755 "$PREFIX/bin/bashop"; }
-    info "installe : $PREFIX/bin/bashop"
+    install -m 0755 "$binaire" "$cible" 2>/dev/null \
+      || { cp "$binaire" "$cible" && chmod 0755 "$cible"; }
+    info "installe : $cible"
 
-    "$PREFIX/bin/bashop" install \
-      || info "bootstrap non pose (a relancer : $PREFIX/bin/bashop install)"
+    "$cible" install \
+      || info "bootstrap non pose (a relancer : $cible install)"
   }
 
 main "$@"

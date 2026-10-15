@@ -47,6 +47,8 @@ enum RcPrepare
     Rcfile(PathBuf),
     /// Répertoire `ZDOTDIR` (zsh).
     Zdotdir(PathBuf),
+    /// Profil PowerShell (`-NoProfile -Command ". <fichier>"`).
+    ProfilPs(PathBuf),
   }
 
 /// Lance un shell à l'intérieur du cadre permanent.
@@ -76,7 +78,7 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
     })?;
 
     let rc = preparer_rc(shell, &palette, theme.suffixe.glyphe, config.suffix_width, config.ligne_vide);
-    let mut commande = CommandBuilder::new(shell.programme());
+    let mut commande = CommandBuilder::new(shell.programme_lance());
     commande.env("TERM", "xterm-256color");
     commande.env("BASHOP_ACTIVE", "1");
     match &rc
@@ -89,7 +91,22 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
         Some(RcPrepare::Zdotdir(dossier)) => {
           commande.env("ZDOTDIR", dossier);
         }
+        Some(RcPrepare::ProfilPs(chemin)) => {
+          commande.arg("-NoLogo");
+          commande.arg("-NoExit");
+          commande.arg("-NoProfile");
+          commande.arg("-Command");
+          commande.arg(format!(". '{}'", chemin.display()));
+        }
         None => {}
+      }
+    if shell == Shell::Cmd
+      {
+        commande.arg("/Q");
+        commande.env(
+          "PROMPT",
+          crate::bootstrap::prompt_cmd(&palette, theme.suffixe.glyphe, config.suffix_width, Some(lignes_shell)),
+        );
       }
 
     let enfant = paire.slave.spawn_command(commande)?;
@@ -1995,12 +2012,11 @@ const HISTORIQUE_MAX: usize = 20_000;
 fn charger_historique() -> Vec<String>
   {
     let mut lignes = Vec::new();
-    let Some(home) = std::env::var_os("HOME")
+    let Some(home) = crate::detect::dossier_utilisateur()
       else
         {
           return lignes;
         };
-    let home = PathBuf::from(home);
     for nom in [".bash_history", ".zsh_history"]
       {
         if let Ok(contenu) = std::fs::read_to_string(home.join(nom))
@@ -2246,6 +2262,11 @@ fn preparer_rc(shell: Shell, palette: &Palette, glyphe: &str, largeur_suffixe: u
           std::fs::write(dossier.join(".zshrc"), crate::bootstrap::zshrc_zsh(palette, glyphe, largeur_suffixe, ligne_vide)).ok()?;
           Some(RcPrepare::Zdotdir(dossier))
         }
+        Shell::PowerShell => {
+          let chemin = dossier.join("bashop-profile.ps1");
+          std::fs::write(&chemin, crate::bootstrap::profil_powershell(palette, glyphe, largeur_suffixe, ligne_vide)).ok()?;
+          Some(RcPrepare::ProfilPs(chemin))
+        }
         _ => None,
       }
   }
@@ -2267,6 +2288,13 @@ fn nettoyer_rc(rc: Option<RcPrepare>)
               let _ = std::fs::remove_file(dossier.join(nom));
             }
           let _ = std::fs::remove_dir(&dossier);
+        }
+        Some(RcPrepare::ProfilPs(chemin)) => {
+          let _ = std::fs::remove_file(&chemin);
+          if let Some(parent) = chemin.parent()
+            {
+              let _ = std::fs::remove_dir(parent);
+            }
         }
         None => {}
       }

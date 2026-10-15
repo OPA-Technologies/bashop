@@ -449,12 +449,12 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
 
 - **Binaires pré-compilés** : aucune chaîne de compilation sur la cible
   (indispensable DSM 7.2 / SRM).
-- **Installateurs noarch** : `build/install.sh` (Unix) et `build/install.ps1`
-  (Windows) détectent OS/arch, **sélectionnent** l'archive correspondante dans
-  l'index (os/arch + variante), vérifient le **SHA256**, installent puis lancent
-  `bashop install`. Sur Synology (DSM), la variante statique `musl` est
-  préférée automatiquement ; `VARIANTE` force un choix, `VERSION` épingle une
-  version.
+- **Installateurs noarch** : `build/install.sh` (Unix, y compris Git Bash/MSYS)
+  et `build/install.ps1` (Windows natif) détectent OS/arch, **sélectionnent**
+  l'archive correspondante dans l'index (os/arch + variante), vérifient le
+  **SHA256**, installent puis lancent `bashop install`. Sur Synology (DSM/SRM),
+  la variante statique `musl` est préférée automatiquement ; `VARIANTE` force un
+  choix, `VERSION` épingle une version.
 - **Index JSON** (`build/index.sh` → `dist/index.json`) : chaque entrée associe
   `os`/`arch`/`version`/**`variante`** à une `url` et un `sha256`. L'index est
   versionné dans le dépôt et les installateurs le lisent par défaut depuis
@@ -462,11 +462,20 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
   dépendre du redirect `releases/latest` de GitHub) ; il est aussi joint aux
   *releases* comme asset `index.json`.
 - **Nomenclature des archives** :
-  `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (ex.
-  `bashop-0.5.1-linux-x86_64-musl.tar.gz`).
+  `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (Unix) ou
+  `bashop-<version>-<os>-<arch>[-<variante>].zip` (Windows) — ex.
+  `bashop-0.5.4-linux-x86_64-musl.tar.gz`, `bashop-0.5.4-windows-x86_64.zip`.
 - **Cibles** : `linux x86_64` (Ubuntu, glibc), `linux x86_64-musl` (statique,
-  DSM/SRM), `freebsd x86_64` (compatible CURRENT et STABLE, lié à `libc.so.7`),
-  `linux aarch64`/`armv7`, `freebsd armv7`, `windows x86_64`.
+  DSM), `linux armv7-musl` (`armv7-unknown-linux-musleabi`, **soft-float** :
+  routeurs Synology SRM RT1900ac (SRM 1.2) et MR2200ac (SRM 1.3), DSM ARMv7),
+  `freebsd x86_64` (compatible CURRENT et STABLE, lié à `libc.so.7`),
+  `linux aarch64`, `windows x86_64` (PowerShell complet + `cmd` best-effort).
+- **Bootstrap runtime** : `bash`/`zsh`/`sh` (fichiers rc), **PowerShell**
+  (profil `$PROFILE.CurrentUserCurrentHost`, dot-source du profil existant puis
+  redéfinition de `prompt`, marqueurs `OSC 133;A/B/D` et `1337;Bashop;…`) et
+  **`cmd` best-effort** (`AutoRun` `HKCU\…\Command Processor` posant `PROMPT` :
+  marqueurs `133;A/B` et couleurs, **sans** marqueur de fin `133;D` — limite
+  native de `cmd` ; statut par repli « idle »).
 - Compilation croisée via `cargo zigbuild` (zig) pour les cibles non natives.
 - Compilation locale = option de **développement** uniquement.
 

@@ -24,6 +24,9 @@ Windows (PowerShell) :
 pwsh -File build/install.ps1
 ```
 
+Sous Git Bash / MSYS / Cygwin, `install.sh` fonctionne aussi et installe
+`bashop.exe`. `install.ps1` est réservé à PowerShell natif.
+
 Options de `install.sh` :
 
 - `PREFIX` : répertoire d'installation (défaut `~/.local`).
@@ -62,11 +65,14 @@ Aucun paquet n'est donc indispensable.
 |------------|---------|---------|
 | Ubuntu / Linux x86_64 | `bashop-<v>-linux-x86_64.tar.gz` | glibc |
 | Synology DS220+ / DSM 7.2 (Linux x86_64) | `bashop-<v>-linux-x86_64-musl.tar.gz` | statique (musl) |
+| Synology SRM : RT1900ac (SRM 1.2), MR2200ac (SRM 1.3) | `bashop-<v>-linux-armv7-musl.tar.gz` | statique (musl, soft-float) |
 | FreeBSD CURRENT / STABLE (amd64) | `bashop-<v>-freebsd-x86_64.tar.gz` | `libc.so.7` |
+| Windows 10 (x86_64) | `bashop-<v>-windows-x86_64.zip` | PE (`bashop.exe`) |
 
-Autres cibles prévues : `linux aarch64`/`armv7`, `freebsd armv7`,
-`windows x86_64`. Les binaires Linux statiques (musl) couvrent les systèmes
-embarqués (DSM/SRM). La compilation croisée utilise `cargo zigbuild` (zig).
+La cible `linux armv7-musl` utilise le triplet **`armv7-unknown-linux-musleabi`**
+(ABI **soft-float**, requis par les routeurs Synology et les DSM ARMv7).
+`linux aarch64` est également produit. La compilation croisée utilise
+`cargo zigbuild` (zig).
 
 ## Depuis les sources (développement)
 
@@ -87,6 +93,19 @@ dans le binaire et invisible à l'installation ; en archive de sources elle doit
   par un shell). Détaillé dans `SPEC.md`.
 - Le bootstrap écrit dans les rc est court : il se contente d'appeler Bashop au
   bon moment (OSC 133, édition mono-ligne, prompt).
+
+### Par shell
+
+- **bash** : bloc dans `~/.bashrc` (`bashop run`) ; `sh` : `~/.profile`.
+- **zsh** : bloc dans `~/.zshrc`.
+- **PowerShell** : bloc dans `$PROFILE.CurrentUserCurrentHost`
+  (`…/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` sous Windows,
+  `~/.config/powershell/…` ailleurs) ; il dot-source le profil existant puis
+  redéfinit `prompt`.
+- **cmd** : *best-effort* via `AutoRun`
+  (`HKCU\Software\Microsoft\Command Processor`) pointant sur
+  `~/.bashop/bashop-cmd.cmd`, qui pose `PROMPT`. cmd ne pouvant pas émettre le
+  marqueur de fin `OSC 133;D`, l'état de la commande est déduit par repli.
 
 ## Essai rapide (développement)
 

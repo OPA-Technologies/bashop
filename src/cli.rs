@@ -57,7 +57,7 @@ pub enum Command
     /// (utilisé en shell imbriqué, ex. `sudo -i`) ; à `eval`er.
     Prompt
       {
-        /// Shell ciblé (bash, zsh).
+        /// Shell ciblé (bash, zsh, powershell, cmd).
         #[arg(long, default_value = "bash")]
         shell: String,
       },

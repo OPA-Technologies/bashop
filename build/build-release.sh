@@ -67,14 +67,25 @@ variante_cible()
     esac
   }
 
+read -r OS ARCH <<<"$(os_arch "$CIBLE")"
+[ "$OS" != "inconnu" ] && [ "$ARCH" != "inconnu" ] || { printf 'Cible non reconnue : %s\n' "$CIBLE" >&2; exit 1; }
+VARIANTE="$(variante_cible "$CIBLE")"
+
+if [ "$OS" = "windows" ]
+  then
+    BIN_NAME="$BIN.exe"
+  else
+    BIN_NAME="$BIN"
+  fi
+
 if [ "$CIBLE" = "native" ]
   then
     SPEC=()
-    BIN_PATH="$ROOT/target/release/$BIN"
+    BIN_PATH="$ROOT/target/release/$BIN_NAME"
   else
     SPEC=(--target "$CIBLE")
     rustup target add "$CIBLE" >/dev/null 2>&1 || true
-    BIN_PATH="$ROOT/target/$CIBLE/release/$BIN"
+    BIN_PATH="$ROOT/target/$CIBLE/release/$BIN_NAME"
   fi
 
 if [ "$CIBLE" = "native" ] || ! command -v cargo-zigbuild >/dev/null 2>&1
@@ -85,22 +96,24 @@ if [ "$CIBLE" = "native" ] || ! command -v cargo-zigbuild >/dev/null 2>&1
     cargo zigbuild --release "${SPEC[@]}" --manifest-path "$ROOT/Cargo.toml"
   fi
 
-read -r OS ARCH <<<"$(os_arch "$CIBLE")"
-[ "$OS" != "inconnu" ] && [ "$ARCH" != "inconnu" ] || { printf 'Cible non reconnue : %s\n' "$CIBLE" >&2; exit 1; }
-VARIANTE="$(variante_cible "$CIBLE")"
-
 DIST="$ROOT/dist"
 NOM="bashop-$VERSION-$OS-$ARCH${VARIANTE:+-$VARIANTE}"
 STAGE="$DIST/$NOM"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/licenses"
-cp "$BIN_PATH" "$STAGE/$BIN"
+cp "$BIN_PATH" "$STAGE/$BIN_NAME"
 cp "$ROOT/LICENSE" "$STAGE/licenses/"
-strip "$STAGE/$BIN" 2>/dev/null || true
+strip "$STAGE/$BIN_NAME" 2>/dev/null || true
 
-TARBALL="$DIST/$NOM.tar.gz"
-tar -C "$STAGE" -czf "$TARBALL" "$BIN" licenses
+if [ "$OS" = "windows" ]
+  then
+    ARCHIVE="$DIST/$NOM.zip"
+    ( cd "$STAGE" && zip -q -r "$ARCHIVE" "$BIN_NAME" licenses )
+  else
+    ARCHIVE="$DIST/$NOM.tar.gz"
+    tar -C "$STAGE" -czf "$ARCHIVE" "$BIN_NAME" licenses
+  fi
 rm -rf "$STAGE"
 
-printf 'Archive  : %s\n' "$(basename "$TARBALL")"
-printf 'SHA256   : %s\n' "$(cd "$DIST" && sha256sum "$(basename "$TARBALL")" | awk '{print $1}')"
+printf 'Archive  : %s\n' "$(basename "$ARCHIVE")"
+printf 'SHA256   : %s\n' "$(cd "$DIST" && sha256sum "$(basename "$ARCHIVE")" | awk '{print $1}')"

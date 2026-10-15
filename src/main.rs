@@ -103,7 +103,9 @@ fn main() -> Result<()>
               {
                 "bash" => print!("{}", bootstrap::script_prompt_bash(&palette, glyphe, config.suffix_width, ligne_vide)),
                 "zsh" => print!("{}", bootstrap::script_prompt_zsh(&palette, glyphe, config.suffix_width, ligne_vide)),
-                _ => eprintln!("Shell non pris en charge pour prompt : {shell} (attendu : bash, zsh)"),
+                "powershell" | "pwsh" => print!("{}", bootstrap::script_prompt_powershell(&palette, glyphe, config.suffix_width, ligne_vide)),
+                "cmd" => print!("{}", bootstrap::prompt_cmd(&palette, glyphe, config.suffix_width, None)),
+                _ => eprintln!("Shell non pris en charge pour prompt : {shell} (attendu : bash, zsh, powershell, cmd)"),
               }
           }
         Command::Capture { state } =>
@@ -154,6 +156,8 @@ fn afficher_template(nom: &str)
       {
         Shell::Bash => println!("{}", bootstrap::prompt_bash(&palette, theme.suffixe.glyphe, largeur)),
         Shell::Zsh => println!("{}", bootstrap::prompt_zsh(&palette, theme.suffixe.glyphe, largeur)),
-        _ => println!("Aucun template de prompt pour « {} ».", shell.nom()),
+        Shell::PowerShell => println!("{}", bootstrap::script_prompt_powershell(&palette, theme.suffixe.glyphe, largeur, true)),
+        Shell::Cmd => println!("{}", bootstrap::prompt_cmd(&palette, theme.suffixe.glyphe, largeur, None)),
+        Shell::Sh => println!("Aucun template de prompt pour « {} ».", shell.nom()),
       }
   }

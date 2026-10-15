@@ -379,7 +379,17 @@ impl MesureSysteme
             let delta_io = io_octets.saturating_sub(precedent.io_octets);
             let delta_net_entree = net_entree.saturating_sub(precedent.net_entree);
             let delta_net_sortie = net_sortie.saturating_sub(precedent.net_sortie);
-            let secondes = maintenant.duration_since(precedent.instant).as_secs_f64().max(0.001);
+            let ecoule = maintenant.duration_since(precedent.instant).as_secs_f64();
+            // Évite `f64::max`, absent de la libm musl ARMv7 soft-float
+            // (`fmaximum_num`), qui casserait l'édition de liens.
+            let secondes = if ecoule < 0.001
+              {
+                0.001
+              }
+            else
+              {
+                ecoule
+              };
             let cpu = if delta_total > 0
               {
                 100.0 * (1.0 - delta_inactif as f64 / delta_total as f64)
