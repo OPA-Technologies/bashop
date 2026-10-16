@@ -14,7 +14,7 @@ Il fonctionne de façon homogène sur les shells usuels (`bash`, `zsh`, `sh`,
 PowerShell, `cmd`) et sur plusieurs OS (Linux, FreeBSD, Windows, DSM/SRM).
 
 Produit en Rust (edition 2024, `rust-version = 1.88`), licence
-GPL-3.0-or-later, crate `bashop` (lib + bin). Version courante : `1.0.0`,
+GPL-3.0-or-later, crate `bashop` (lib + bin). Version courante : `1.1.0`,
 statut `Stable` (`src/lib.rs` en est la source unique).
 
 ## 2. Positionnement et modèle d'exécution
@@ -33,6 +33,16 @@ shell tourne dans un pseudo-terminal enfant.
   **dégradé** si un vrai multiplexeur occupe déjà le terminal.
 - **Cadre toujours visible** : la ligne d'état et la ligne de contexte restent
   affichées même pendant `vi`, `less`, `man`.
+- **Pane fidèle (modèle tmux)** : la zone centrale est un vrai émulateur VT — le
+  cadre reste vivant pendant une application plein écran et l'application en
+  garde le **contrôle total** (pas de blocage). Sont émulés : les **zones de
+  défilement** (`DECSTBM`) avec défilement `SU`/`SD` (`CSI S`/`CSI T`) et
+  insertion/suppression de lignes `IL`/`DL` (`CSI L`/`CSI M`) ; l'**écran
+  alterné** (`DECSET 1049`/`1047`/`47`), qui sauvegarde et restaure grille et
+  curseur **sans polluer le scrollback** ; `DECCKM` (curseur applicatif),
+  `DECOM` (origine), les **jeux de caractères** (`ESC ( 0` / `ESC ( B`) ; les
+  **réponses** `DA` (`CSI c`) et `DSR` (`CSI 6n`) ; le relais du **titre**
+  (`OSC 0`/`OSC 2`) et de la **forme du curseur** (`CSI q`).
 - **Environnement du shell enfant** : le shell lancé par le cadre émule un
   démarrage **login + interactif** — il source `/etc/profile`, le premier de
   `~/.bash_profile` / `~/.bash_login` / `~/.profile`, puis `/etc/bash.bashrc`
@@ -130,6 +140,9 @@ Barre pleine largeur à trois zones :
    (code non nul), la **première ligne** du message d'erreur est recopiée après
    le code (`✗ N — message`). Copie **purement observationnelle** : la sortie
    réelle du shell, son code retour et ses redirections ne sont jamais altérés.
+   À droite du code, des **badges discrets** signalent `⛶ plein écran` tant
+   qu'une application occupe l'écran alterné, et `⇢ distant` lorsqu'une
+   connexion distante (`ssh`/`telnet`) est en cours (voir §5).
 3. **Droite — compteurs système** compacts (io / réseau / mémoire / cpu),
    rafraîchis toutes les **0,5 s**.
 
@@ -221,6 +234,11 @@ lignes du cadre (stat, prompt, context) restent visibles.
   lui-même la souris. Si le programme lancé réclame le suivi souris
   (`1000`/`1002`/`1003`), les évènements lui sont **transmis** (encodage
   `1006`/`1015`) ; sinon Bashop les exploite.
+- **Souris fidèle en plein écran** : sous application plein écran, Bashop
+  relaie la souris comme tmux. Tant que dure le plein écran et que
+  l'application ne capture pas la souris, la **molette** est convertie en
+  **flèches** `↑`/`↓` (selon `DECCKM`) au lieu de faire défiler le scrollback ;
+  le scrollback et la sélection interne restent suspendus.
 - **Molette = scrollback** : la molette fait défiler la zone centrale (historique
   défilant, 10 000 lignes), jamais l'historique du shell — le défilement alterné
   (`DECSET 1007`) est désactivé (rétabli à la sortie, *best-effort*).
@@ -238,13 +256,14 @@ lignes du cadre (stat, prompt, context) restent visibles.
 
 ## 5. Thèmes et prompt
 
-Un thème décrit le **suffixe** affiché et les couleurs. Trois thèmes fournis :
+Un thème décrit le **suffixe** affiché et les couleurs. Quatre thèmes fournis :
 
 | Thème      | Suffixe | Couleur / style |
 |------------|---------|-----------------|
 | `classique`| `>>`    | vert foncé (base) |
 | `wheel`    | `>>>>`  | violet |
 | `root`     | `###>`  | rouge, **reverse** |
+| `distant`  | `>>~`   | accent cyan `#7FD4E8`, fond bleu nuit `#1B2A3A` |
 
 - Largeur de suffixe **normalisée** : champ de **6 colonnes**, cadré à
   **gauche** (remplissage en fin) pour rapprocher le suffixe du chemin, la
@@ -258,7 +277,13 @@ Un thème décrit le **suffixe** affiché et les couleurs. Trois thèmes fournis
   `wheel` si l'utilisateur appartient au groupe d'administration **de l'OS
   hôte** (`wheel`/`sudo`/`admin`/`adm` sous Linux, `admin`/`wheel` sous macOS,
   `wheel`/`operator` sous FreeBSD, `Administrateurs` sous Windows), sinon
-  `classique`. Un nom explicite (`classique`, `wheel`, `root`) prime.
+  `classique`. Un nom explicite (`classique`, `wheel`, `root`, `distant`) prime.
+- **Thème distant** : une connexion distante détectée par `lexer`
+  (`ssh`, `sshpass`→`ssh`, `telnet`, avec `utilisateur@hôte` ou `-l user`)
+  bascule le thème vers `distant`. Si l'utilisateur distant est `root`, le thème
+  `root` prime. La bascule ne s'applique qu'au thème `auto`/vide — un nom
+  explicite reste prioritaire. La zone centrale garde son fond (fixé par l'`OSC
+  11` initial) ; seuls `term_stat`, `term_context` et le prompt changent.
 - **Badge root** : clignotement via **SGR** (pas de clignotement de l'invite
   entière).
 
@@ -356,6 +381,12 @@ alerte et propose, l'utilisateur décide.
 - **Horodatage optionnel** des commandes : avec `HORODATAGE=on`, l'heure de
   lancement (`🕐 HH:MM:SS`) s'affiche au centre de `term_context`.
 - Mode **dégradé** si le terminal ne supporte pas les capacités requises.
+- **Réponses d'émulation** : l'émulateur répond aux requêtes de l'application —
+  `DA` (`CSI c` → `CSI ?1;2c`), `DSR` (`CSI 6n` → position du curseur, `CSI 5n`
+  → `CSI 0n`) — et les écrit vers l'enfant ; le titre (`OSC 0`/`OSC 2`) et la
+  forme du curseur (`CSI q`) sont relayés à l'hôte. La lecture d'un presse-papier
+  (`OSC 52;c;?`) est marquée pour que Bashop y réponde, sans relayer les requêtes
+  de couleur (`OSC 4`/`10`/`11`/`12`) à l'hôte.
 - **Rappel de touches** toujours présent dans `term_context`.
 - **Restauration terminal** : `SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT` (et le hook
   de panique) rétablissent termios, écran alterné, souris, fond et curseur, puis
@@ -375,7 +406,7 @@ Clés reconnues (extrait) :
 
 | Clé | Effet |
 |-----|-------|
-| `THEME` | Thème de prompt (`classique`, `wheel`, `root`). |
+| `THEME` | Thème de prompt (`classique`, `wheel`, `root`, `distant`). |
 | `TRIGGERS` | Tokens déclenchant la bascule root (défaut `sudo doas su sudoedit`). |
 | `SUFFIX_WIDTH` | Largeur normalisée du champ suffixe (défaut `6`). |
 | `CAPTURE` | Mode capture `on`/`off` (défaut `on`) ; réécrit par `bashop capture`. |
@@ -414,7 +445,7 @@ src/
   config.rs      lecture ~/.opshellrc (KEY=VALUE) + tests
   config_ui.rs   interface `bashop config` (formulaire op-tui + --reload-rc)
   theme.rs       themes, suffixe, couleurs + tests
-  lexer.rs       decoupage et detection de declencheur + tests
+  lexer.rs       decoupage, declencheur et session distante (ssh/telnet) + tests
   detect.rs      OS, arch, shell, privilege, anti-nidification
   install.rs     injection/retrait idempotent du bloc dans les rc
   bootstrap.rs   contenu du bloc (rc bash/zsh, OSC 1337, PROMPT_COMMAND)
@@ -438,6 +469,9 @@ src/
     mod.rs       cadre
     stat.rs      term_stat
     context.rs   term_context
+
+tests/
+  pty.rs         integration par pseudo-terminal (reemulation d'un vrai programme)
 ```
 
 Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
@@ -464,7 +498,7 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
 - **Nomenclature des archives** :
   `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (Unix) ou
   `bashop-<version>-<os>-<arch>[-<variante>].zip` (Windows) — ex.
-  `bashop-1.0.0-linux-x86_64-musl.tar.gz`, `bashop-1.0.0-windows-x86_64.zip`.
+  `bashop-1.1.0-linux-x86_64-musl.tar.gz`, `bashop-1.1.0-windows-x86_64.zip`.
 - **Cibles** : `linux x86_64` (Ubuntu, glibc), `linux x86_64-musl` (statique,
   DSM), `linux armv7-musl` (`armv7-unknown-linux-musleabi`, **soft-float** :
   routeurs Synology SRM RT1900ac (SRM 1.2) et MR2200ac (SRM 1.3), DSM ARMv7),
@@ -497,6 +531,7 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
 | **M4** | Sécurité (§7) + configuration (§10). |
 | **M5** | Mode capture, session, charge, notifications. |
 | **M6** | Distribution (releases, index, installateurs). |
+| **M7** | Pane fidèle VT (zones de défilement, alt-screen, réponses DA/DSR) + thème `distant` + tests PTY — **1.1.0**. |
 
 ## 14. Conventions de code
 

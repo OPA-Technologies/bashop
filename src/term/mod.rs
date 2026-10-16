@@ -86,6 +86,22 @@ pub struct Terminal
     pub souris_utf8: bool,
     /// Collage encadré actif (DECSET 2004).
     pub paste_bracketed: bool,
+    /// Marge haute de la zone de défilement (DECSTBM), 0-indexée.
+    pub zone_haut: u16,
+    /// Marge basse de la zone de défilement (DECSTBM), 0-indexée incluse.
+    pub zone_bas: u16,
+    /// Curseur en mode applicatif (DECCKM, `CSI ? 1 h`).
+    pub curseur_appli: bool,
+    /// Mode origine (DECOM, `CSI ? 6 h`) : positionnement relatif à la zone.
+    pub origine: bool,
+    /// Jeu de caractères DEC Special Graphics actif (`ESC ( 0`).
+    pub jeu_dec: bool,
+    /// Forme du curseur demandée (DECSCUSR, `CSI Ps SP q`), relayée à l'hôte.
+    pub curseur_forme: Option<u8>,
+    /// Le programme enfant demande la lecture du presse-papier (OSC 52;?).
+    pub demande_presse_papier: bool,
+    /// Réponses du terminal à renvoyer au programme enfant (DA, DSR, OSC 52).
+    pub reponses: Vec<u8>,
     ecran_alterne: Option<EcranSauve>,
     sauvegarde: Option<(u16, u16)>,
   }
@@ -118,6 +134,14 @@ impl Terminal
           souris_sgr: false,
           souris_utf8: false,
           paste_bracketed: false,
+          zone_haut: 0,
+          zone_bas: hauteur.saturating_sub(1),
+          curseur_appli: false,
+          origine: false,
+          jeu_dec: false,
+          curseur_forme: None,
+          demande_presse_papier: false,
+          reponses: Vec::new(),
           ecran_alterne: None,
           sauvegarde: None,
         }
@@ -134,6 +158,54 @@ impl Terminal
       {
         self.grid.redimensionner(largeur, hauteur);
         self.col_commande = self.col_commande.min(largeur.saturating_sub(1));
+        self.zone_haut = 0;
+        self.zone_bas = self.grid.hauteur.saturating_sub(1);
+      }
+
+    /// Vrai si le programme enfant occupe l'écran alterné (plein écran).
+    pub fn en_plein_ecran(&self) -> bool
+      {
+        self.ecran_alterne.is_some()
+      }
+
+    /// Vide et renvoie les réponses en attente (DA, DSR, OSC 52) à écrire au
+    /// programme enfant.
+    pub fn prendre_reponses(&mut self) -> Vec<u8>
+      {
+        std::mem::take(&mut self.reponses)
+      }
+
+    /// Ajoute une réponse destinée au programme enfant.
+    pub(crate) fn repondre(&mut self, octets: &[u8])
+      {
+        self.reponses.extend_from_slice(octets);
+      }
+
+    /// Définit la zone de défilement (DECSTBM). Une zone dégénérée est ignorée.
+    pub(crate) fn definir_zone(&mut self, haut: u16, bas: u16)
+      {
+        let haut = haut.min(self.grid.hauteur.saturating_sub(1));
+        let bas = bas.min(self.grid.hauteur.saturating_sub(1));
+        if haut < bas
+          {
+            self.zone_haut = haut;
+            self.zone_bas = bas;
+            self.grid.curseur_lig = if self.origine { haut } else { 0 };
+            self.grid.curseur_col = 0;
+          }
+      }
+
+    /// Borne une ligne du curseur : à la zone en mode origine, à l'écran sinon.
+    pub(crate) fn borner_lig(&self, lig: u16) -> u16
+      {
+        if self.origine
+          {
+            lig.clamp(self.zone_haut, self.zone_bas)
+          }
+        else
+          {
+            lig.min(self.grid.hauteur.saturating_sub(1))
+          }
       }
 
     /// Cellule au style courant.
@@ -174,6 +246,7 @@ impl Terminal
     /// Imprime un caractère à la position du curseur.
     pub(crate) fn imprimer(&mut self, c: char)
       {
+        let c = if self.jeu_dec { traduire_dec(c) } else { c };
         let largeur = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16;
         if largeur == 0
           {
@@ -206,9 +279,11 @@ impl Terminal
       {
         let lig = self.grid.curseur_lig;
         self.capturer_sortie(lig);
-        if lig + 1 >= self.grid.hauteur
+        if lig >= self.zone_bas
           {
-            self.grid.defiler_haut();
+            let plein_ecran = self.zone_haut == 0 && self.zone_bas + 1 >= self.grid.hauteur;
+            let historique = self.ecran_alterne.is_none() && plein_ecran;
+            self.grid.defiler_zone_haut(self.zone_haut, self.zone_bas, historique);
           }
         else
           {
@@ -254,9 +329,9 @@ impl Terminal
     /// Reverse index (ESC M) : ligne précédente, ou défilement vers le bas.
     pub(crate) fn index_reverse(&mut self)
       {
-        if self.grid.curseur_lig == 0
+        if self.grid.curseur_lig <= self.zone_haut
           {
-            self.grid.defiler_bas();
+            self.grid.defiler_zone_bas(self.zone_haut, self.zone_bas);
           }
         else
           {
@@ -284,7 +359,8 @@ impl Terminal
     pub(crate) fn bouger_lig(&mut self, delta: i32)
       {
         let cible = self.grid.curseur_lig as i32 + delta;
-        self.grid.curseur_lig = cible.clamp(0, self.grid.hauteur as i32 - 1) as u16;
+        let borne = cible.clamp(0, self.grid.hauteur as i32 - 1) as u16;
+        self.grid.curseur_lig = self.borner_lig(borne);
       }
 
     /// Ajuste la colonne du curseur d'un décalage relatif.
@@ -350,11 +426,15 @@ impl Terminal
             self.grid.effacer_ecran(modele);
             self.grid.curseur_lig = 0;
             self.grid.curseur_col = 0;
+            self.zone_haut = 0;
+            self.zone_bas = self.grid.hauteur.saturating_sub(1);
           }
         else if let Some(sauve) = self.ecran_alterne.take()
           {
             self.grid = sauve.grid;
             self.curseur_visible = sauve.curseur_visible;
+            self.zone_haut = 0;
+            self.zone_bas = self.grid.hauteur.saturating_sub(1);
           }
       }
 
@@ -370,5 +450,31 @@ impl Terminal
         let texte = self.grid.texte_ligne(self.grid.curseur_lig);
         let debut = (self.col_commande as usize).min(texte.chars().count());
         texte.chars().skip(debut).collect::<String>().trim().to_string()
+      }
+  }
+
+/// Traduit un caractère du jeu DEC Special Graphics (`ESC ( 0`) vers Unicode.
+/// Hors de la plage des bordures/symboles, le caractère est inchangé.
+fn traduire_dec(c: char) -> char
+  {
+    match c
+      {
+        '`' => '◆',
+        'a' => '▒',
+        'f' => '°',
+        'g' => '±',
+        'j' => '┘',
+        'k' => '┐',
+        'l' => '┌',
+        'm' => '└',
+        'n' => '┼',
+        'q' => '─',
+        't' => '├',
+        'u' => '┤',
+        'v' => '┴',
+        'w' => '┬',
+        'x' => '│',
+        '~' => '·',
+        _ => c,
       }
   }

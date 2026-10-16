@@ -83,6 +83,16 @@ pub const ROOT: Theme =
     fond: Rgb::new(0x80, 0x00, 0x00),
   };
 
+/// Thème distant (session `ssh`/`telnet` non privilégiée) : fond bleu nuit et
+/// accent cyan pour marquer une session **hors de la machine locale**.
+pub const DISTANT: Theme =
+  Theme {
+    nom: "distant",
+    accent: Rgb::new(0x7F, 0xD4, 0xE8),
+    suffixe: Suffixe { glyphe: ">>~", couleur: Rgb::new(0x7F, 0xD4, 0xE8) },
+    fond: Rgb::new(0x1B, 0x2A, 0x3A),
+  };
+
 /// Texte par défaut des lignes `term_stat` et `term_context`.
 pub const TEXTE_CADRE: Rgb = Rgb::new(0xE6, 0xED, 0xF3);
 /// Texte des lignes `term_stat` et `term_context` en thème `root` : éclairci
@@ -250,6 +260,20 @@ pub fn palette(theme: &Theme, surcharge: &Surcharge) -> Palette
           prompt_heure: COULEUR_HEURE,
         };
       }
+    if theme.nom == "distant"
+      {
+        return Palette {
+          stat_fg: TEXTE_CADRE,
+          stat_bg: DISTANT.fond,
+          contexte_fg: TEXTE_CADRE,
+          contexte_bg: DISTANT.fond,
+          prompt_fg: DISTANT.accent,
+          prompt_bg: DISTANT.fond,
+          prompt_chemin: COULEUR_CHEMIN,
+          prompt_historique: COULEUR_HISTORIQUE,
+          prompt_heure: COULEUR_HEURE,
+        };
+      }
     let mut palette = Palette::defaut();
     palette.appliquer(surcharge);
     if theme.nom == "wheel"
@@ -266,6 +290,7 @@ pub fn par_nom(nom: &str) -> Theme
       {
         "wheel" => WHEEL,
         "root" => ROOT,
+        "distant" => DISTANT,
         _ => CLASSIQUE,
       }
   }
@@ -305,6 +330,7 @@ mod tests
       {
         assert_eq!(par_nom("wheel"), WHEEL);
         assert_eq!(par_nom("ROOT"), ROOT);
+        assert_eq!(par_nom("distant"), DISTANT);
       }
 
     #[test]
@@ -343,6 +369,18 @@ mod tests
         assert_eq!(WHEEL.fond, FOND_NEUTRE);
         assert_ne!(ROOT.fond, FOND_NEUTRE);
         assert!(tire_vers_le_rouge(ROOT.fond), "le fond root doit tirer vers le rouge");
+      }
+
+    #[test]
+    fn le_theme_distant_a_un_fond_propre_tire_vers_le_bleu()
+      {
+        const FOND_NEUTRE: Rgb = Rgb::new(0x2E, 0x34, 0x40);
+        assert_ne!(DISTANT.fond, FOND_NEUTRE);
+        assert_ne!(DISTANT.fond, ROOT.fond);
+        const { assert!(DISTANT.fond.b > DISTANT.fond.r, "le fond distant doit tirer vers le bleu") };
+        let p = palette(&DISTANT, &Surcharge::default());
+        assert_eq!(p.stat_bg, DISTANT.fond);
+        assert_eq!(p.prompt_fg, DISTANT.accent);
       }
 
     #[test]

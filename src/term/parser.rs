@@ -84,6 +84,12 @@ impl Terminal
               }
             match valeur
               {
+                1 => self.curseur_appli = actif,
+                6 => {
+                  self.origine = actif;
+                  self.grid.curseur_lig = if actif { self.zone_haut } else { 0 };
+                  self.grid.curseur_col = 0;
+                }
                 25 => self.curseur_visible = actif,
                 9 => self.souris = if actif { SourisMode::X10 } else { SourisMode::Aucune },
                 1000 => self.souris = if actif { SourisMode::Bouton } else { SourisMode::Aucune },
@@ -94,7 +100,7 @@ impl Terminal
                 1006 => self.souris_sgr = actif,
                 1015 => self.souris_utf8 = actif,
                 2004 => self.paste_bracketed = actif,
-                1049 => self.ecran_alterne(actif),
+                47 | 1047 | 1049 => self.ecran_alterne(actif),
                 _ => {}
               }
           }
@@ -200,9 +206,15 @@ impl Perform for Terminal
             'C' => self.bouger_col(parametre(params, 0, 1, false) as i32),
             'D' => self.bouger_col(-(parametre(params, 0, 1, false) as i32)),
             'G' => self.grid.curseur_col = (parametre(params, 0, 1, false) - 1).min(self.grid.largeur.saturating_sub(1)),
-            'd' => self.grid.curseur_lig = (parametre(params, 0, 1, false) - 1).min(self.grid.hauteur.saturating_sub(1)),
+            'd' => {
+              let base = if self.origine { self.zone_haut } else { 0 };
+              let lig = base.saturating_add(parametre(params, 0, 1, false).saturating_sub(1));
+              self.grid.curseur_lig = self.borner_lig(lig);
+            }
             'H' | 'f' => {
-              self.grid.curseur_lig = (parametre(params, 0, 1, false) - 1).min(self.grid.hauteur.saturating_sub(1));
+              let base = if self.origine { self.zone_haut } else { 0 };
+              let lig = base.saturating_add(parametre(params, 0, 1, false).saturating_sub(1));
+              self.grid.curseur_lig = self.borner_lig(lig);
               self.grid.curseur_col = (parametre(params, 1, 1, false) - 1).min(self.grid.largeur.saturating_sub(1));
             }
             'J' => self.effacer_ecran_mode(parametre(params, 0, 0, true)),
@@ -221,9 +233,67 @@ impl Perform for Terminal
               let col = self.grid.curseur_col;
               self.grid.inserer_caracteres(lig, col, n, modele);
             }
+            'r' => {
+              let haut = parametre(params, 0, 1, false).saturating_sub(1);
+              let bas = parametre(params, 1, self.grid.hauteur, false).saturating_sub(1);
+              self.definir_zone(haut, bas);
+            }
+            'S' => {
+              for _ in 0..parametre(params, 0, 1, false)
+                {
+                  let (haut, bas) = (self.zone_haut, self.zone_bas);
+                  self.grid.defiler_zone_haut(haut, bas, false);
+                }
+            }
+            'T' => {
+              let haut = self.zone_haut;
+              let bas = self.zone_bas;
+              for _ in 0..parametre(params, 0, 1, false)
+                {
+                  self.grid.defiler_zone_bas(haut, bas);
+                }
+            }
+            'L' => {
+              let n = parametre(params, 0, 1, false);
+              let modele = self.cellule_effacement();
+              let lig = self.grid.curseur_lig;
+              let (haut, bas) = (self.zone_haut, self.zone_bas);
+              self.grid.inserer_lignes(lig, n, haut, bas, modele);
+            }
+            'M' => {
+              let n = parametre(params, 0, 1, false);
+              let modele = self.cellule_effacement();
+              let lig = self.grid.curseur_lig;
+              let (haut, bas) = (self.zone_haut, self.zone_bas);
+              self.grid.supprimer_lignes(lig, n, haut, bas, modele);
+            }
             'm' => self.sgr(params),
             'h' => self.mode(params, prive, true),
             'l' => self.mode(params, prive, false),
+            's' => self.sauver_curseur(),
+            'u' => self.restaurer_curseur(),
+            'n' => match parametre(params, 0, 0, true)
+              {
+                5 => self.repondre(b"\x1b[0n"),
+                6 => {
+                  let reponse = format!("\x1b[{};{}R", self.grid.curseur_lig + 1, self.grid.curseur_col + 1);
+                  self.repondre(reponse.as_bytes());
+                }
+                _ => {}
+              },
+            'c' => {
+              if intermediates.contains(&b'>')
+                {
+                  self.repondre(b"\x1b[>0;0;0c");
+                }
+              else
+                {
+                  self.repondre(b"\x1b[?1;2c");
+                }
+            }
+            'q' if intermediates.contains(&b' ') => {
+              self.curseur_forme = Some(parametre(params, 0, 0, true) as u8);
+            }
             'X' => {
               let n = parametre(params, 0, 1, false);
               let lig = self.grid.curseur_lig;
@@ -237,8 +307,18 @@ impl Perform for Terminal
           }
       }
 
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8)
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8)
       {
+        if intermediates == b"("
+          {
+            match byte
+              {
+                b'0' => self.jeu_dec = true,
+                b'B' => self.jeu_dec = false,
+                _ => {}
+              }
+            return;
+          }
         match byte
           {
             b'D' => self.index(),
@@ -272,6 +352,13 @@ impl Perform for Terminal
             }
             Some("133") => self.osc_133(params),
             Some("1337") => self.osc_prive(params),
+            Some("52") => {
+              let demande = params.get(2).map(|p| p.as_ref()) == Some(b"?".as_slice());
+              if demande
+                {
+                  self.demande_presse_papier = true;
+                }
+            }
             _ => {}
           }
       }
@@ -437,5 +524,121 @@ mod tests
         alimenter(&mut term, b"BOOM: no such file\r\n");
         alimenter(&mut term, b"\x1b]133;D;2\x1b\\");
         assert_eq!(term.derniere_erreur.as_deref(), Some("BOOM: no such file"));
+      }
+
+    #[test]
+    fn la_zone_de_defilement_limite_le_scroll_et_l_historique()
+      {
+        let mut term = Terminal::nouveau(6, 3);
+        alimenter(&mut term, b"1\r\n2\r\n3");
+        alimenter(&mut term, b"\x1b[2;3r");
+        alimenter(&mut term, b"\x1b[3;1H\n");
+        assert!(term.grid.texte_ligne(0).starts_with('1'), "hors zone intacte");
+        assert!(term.grid.texte_ligne(1).starts_with('3'), "la ligne basse remonte dans la zone");
+        assert_eq!(term.grid.texte_ligne(2).trim(), "", "la ligne basse est vidée");
+        assert_eq!(term.grid.arriere_plan_len(), 0, "marge haute ≠ 0 : pas d'historique");
+      }
+
+    #[test]
+    fn le_defilement_plein_ecran_alimente_l_historique()
+      {
+        let mut term = Terminal::nouveau(4, 2);
+        alimenter(&mut term, b"1\r\n2\r\n3");
+        assert_eq!(term.grid.arriere_plan_len(), 1);
+      }
+
+    #[test]
+    fn l_ecran_alterne_ne_pollue_pas_l_historique()
+      {
+        let mut term = Terminal::nouveau(4, 3);
+        assert!(!term.en_plein_ecran());
+        alimenter(&mut term, b"\x1b[?1049h");
+        assert!(term.en_plein_ecran());
+        alimenter(&mut term, b"1\r\n2\r\n3\r\n4\r\n");
+        assert_eq!(term.grid.arriere_plan_len(), 0, "aucun historique en plein écran");
+      }
+
+    #[test]
+    fn csi_l_insere_et_csi_m_supprime_des_lignes()
+      {
+        let mut term = Terminal::nouveau(6, 4);
+        alimenter(&mut term, b"1\r\n2\r\n3\r\n4");
+        alimenter(&mut term, b"\x1b[2;1H");
+        alimenter(&mut term, b"\x1b[L");
+        assert!(term.grid.texte_ligne(0).starts_with('1'));
+        assert_eq!(term.grid.texte_ligne(1).trim(), "");
+        assert!(term.grid.texte_ligne(2).starts_with('2'));
+        assert!(term.grid.texte_ligne(3).starts_with('3'));
+        alimenter(&mut term, b"\x1b[M");
+        assert!(term.grid.texte_ligne(1).starts_with('2'), "la suppression remonte les lignes");
+      }
+
+    #[test]
+    fn csi_s_et_csi_t_font_defiler_la_zone()
+      {
+        let mut term = Terminal::nouveau(6, 3);
+        alimenter(&mut term, b"1\r\n2\r\n3");
+        alimenter(&mut term, b"\x1b[S");
+        assert!(term.grid.texte_ligne(0).starts_with('2'));
+        assert!(term.grid.texte_ligne(1).starts_with('3'));
+        assert_eq!(term.grid.texte_ligne(2).trim(), "");
+        alimenter(&mut term, b"\x1b[T");
+        assert_eq!(term.grid.texte_ligne(0).trim(), "");
+        assert!(term.grid.texte_ligne(1).starts_with('2'));
+      }
+
+    #[test]
+    fn le_decckm_et_le_decom_sont_suivis()
+      {
+        let mut term = Terminal::nouveau(10, 5);
+        assert!(!term.curseur_appli);
+        assert!(!term.origine);
+        alimenter(&mut term, b"\x1b[?1h\x1b[?6h");
+        assert!(term.curseur_appli);
+        assert!(term.origine);
+        alimenter(&mut term, b"\x1b[?1l\x1b[?6l");
+        assert!(!term.curseur_appli);
+        assert!(!term.origine);
+      }
+
+    #[test]
+    fn les_reponses_da_et_dsr_sont_emises()
+      {
+        let mut term = Terminal::nouveau(10, 5);
+        alimenter(&mut term, b"\x1b[c");
+        assert_eq!(term.prendre_reponses(), b"\x1b[?1;2c".to_vec());
+        alimenter(&mut term, b"\x1b[3;4H\x1b[6n");
+        assert_eq!(term.prendre_reponses(), b"\x1b[3;4R".to_vec());
+        alimenter(&mut term, b"\x1b[5n");
+        assert_eq!(term.prendre_reponses(), b"\x1b[0n".to_vec());
+      }
+
+    #[test]
+    fn le_jeu_dec_traduit_les_caracteres_de_bornes()
+      {
+        let mut term = Terminal::nouveau(10, 2);
+        alimenter(&mut term, b"\x1b(0q\x1b(Bq");
+        let ligne: Vec<char> = term.grid.texte_ligne(0).chars().collect();
+        assert_eq!(term.grid.curseur_col, 2);
+        assert_eq!(term.grid.texte_ligne(0).chars().next(), Some('─'));
+        assert_ne!(term.grid.texte_ligne(0).chars().nth(1), Some('─'));
+        let _ = ligne;
+      }
+
+    #[test]
+    fn l_osc_52_de_lecture_est_marque()
+      {
+        let mut term = Terminal::nouveau(10, 5);
+        alimenter(&mut term, b"\x1b]52;c;?\x07");
+        assert!(term.demande_presse_papier);
+        assert!(term.prendre_reponses().is_empty());
+      }
+
+    #[test]
+    fn la_forme_du_curseur_est_retnote()
+      {
+        let mut term = Terminal::nouveau(10, 5);
+        alimenter(&mut term, b"\x1b[5 q");
+        assert_eq!(term.curseur_forme, Some(5));
       }
   }

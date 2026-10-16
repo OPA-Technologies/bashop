@@ -30,6 +30,7 @@ use ratatui::widgets::Paragraph;
 use crate::config::Config;
 use crate::detect::Privilege;
 use crate::frame::{context, stat};
+use crate::lexer;
 use crate::observe::EtatShell;
 use crate::providers::{self, MesureSysteme};
 use crate::restauration;
@@ -210,6 +211,9 @@ pub fn executer(shell_demande: Option<String>, config: &Config) -> Result<()>
       derniere_click: None,
       derniere_ligne_souris: 0,
       derniere_col_souris: 0,
+      session_distante: None,
+      titre_hote: String::new(),
+      forme_curseur_hote: None,
     };
 
     let resultat = app.boucle(&mut terminal);
@@ -305,6 +309,9 @@ struct App
     derniere_click: Option<(Instant, u16, u16)>,
     derniere_ligne_souris: u16,
     derniere_col_souris: u16,
+    session_distante: Option<lexer::SessionDistante>,
+    titre_hote: String,
+    forme_curseur_hote: Option<u8>,
   }
 
 impl App
@@ -327,8 +334,18 @@ impl App
                     Ok(octets) => {
                       self.term.alimenter(&mut self.parser, &octets);
                       self.dernier_flux = Instant::now();
+                      self.publier_reponses()?;
                       self.rafraichir_privilege();
                       self.sur_fin_commande();
+                      if self.term.etat == EtatShell::Prompt
+                        {
+                          self.session_distante = None;
+                        }
+                      if self.term.en_plein_ecran()
+                        {
+                          self.decalage = 0;
+                        }
+                      self.synchroniser_hote(terminal)?;
                       sale = true;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -401,6 +418,17 @@ impl App
         if self.overlay.is_some()
           {
             return self.touche_overlay(touche);
+          }
+        if self.term.en_plein_ecran()
+          {
+            let octets = encoder_touche(&touche);
+            if !octets.is_empty()
+              {
+                self.ghost = None;
+                self.ecrivain.write_all(&octets)?;
+                self.ecrivain.flush()?;
+              }
+            return Ok(());
           }
         let pas = self.hauteur.saturating_sub(3).max(1) as i32;
         match touche.code
@@ -670,6 +698,8 @@ impl App
     fn executer_ligne(&mut self) -> Result<()>
       {
         self.term.commande_lancee = self.term.commande_courante();
+        self.session_distante = lexer::session_distante(&self.term.commande_lancee);
+        self.rafraichir_privilege();
         self.ecrivain.write_all(b"\r")?;
         self.ecrivain.flush()?;
         self.term.alimenter(&mut self.parser, b"\x1b]133;C\x1b\\");
@@ -718,8 +748,63 @@ impl App
     /// Fait défiler la vue de `delta` lignes (<0 vers le haut, >0 vers le bas).
     fn defiler(&mut self, delta: i32)
       {
+        if self.term.en_plein_ecran()
+          {
+            self.decalage = 0;
+            return;
+          }
         let max = self.term.grid.arriere_plan_len() as i32;
         self.decalage = (self.decalage as i32 + delta).clamp(0, max) as usize;
+      }
+
+    /// Renvoie au programme enfant les réponses qu'il attend (DA, DSR, OSC 52).
+    fn publier_reponses(&mut self) -> Result<()>
+      {
+        if self.term.demande_presse_papier
+          {
+            self.term.demande_presse_papier = false;
+            let texte = lire_presse_papier()
+              .or_else(|| self.presse_papier_interne.clone())
+              .unwrap_or_default();
+            self.ecrivain.write_all(&encoder_osc52(&texte))?;
+            self.ecrivain.flush()?;
+          }
+        let reponses = self.term.prendre_reponses();
+        if !reponses.is_empty()
+          {
+            self.ecrivain.write_all(&reponses)?;
+            self.ecrivain.flush()?;
+          }
+        Ok(())
+      }
+
+    /// Répercute sur le terminal hôte le titre et la forme du curseur demandés
+    /// par le programme enfant (relais, sans altérer le cadre).
+    fn synchroniser_hote(
+      &mut self,
+      terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<()>
+      {
+        if self.term.titre != self.titre_hote && !self.term.titre.is_empty()
+          {
+            let titre = self.term.titre.clone();
+            let sequence = format!("\x1b]2;{titre}\x1b\\");
+            terminal.backend_mut().write_all(sequence.as_bytes())?;
+            self.titre_hote = titre;
+          }
+        if self.term.curseur_forme != self.forme_curseur_hote
+          {
+            let forme = self.term.curseur_forme;
+            if let Some(n) = forme
+              {
+                let sequence = format!("\x1b[{n} q");
+                let arriere = terminal.backend_mut();
+                arriere.write_all(sequence.as_bytes())?;
+                arriere.flush()?;
+              }
+            self.forme_curseur_hote = forme;
+          }
+        Ok(())
       }
 
     /// État effectif du shell, avec repli « idle » pour les shells sans OSC 133.
@@ -737,18 +822,38 @@ impl App
           }
       }
 
-    /// Recalcule le thème si le privilège publié par le shell a changé.
+    /// Recalcule le thème effectif (privilège local, ou session distante).
     fn rafraichir_privilege(&mut self)
       {
-        if let Some(privilege) = self.term.privilege
+        let theme = self.theme_effectif();
+        if theme != self.theme
           {
-            let theme = theme::resoudre(&self.config.theme, privilege);
-            if theme != self.theme
-              {
-                self.theme = theme;
-                self.palette = theme::palette(&theme, &self.config.couleurs);
-              }
+            self.theme = theme;
+            self.palette = theme::palette(&theme, &self.config.couleurs);
           }
+      }
+
+    /// Thème de base, hors session distante : suit le privilège détecté.
+    fn theme_base(&self) -> Theme
+      {
+        theme::resoudre(&self.config.theme, self.term.privilege.unwrap_or_else(crate::detect::privilege))
+      }
+
+    /// Thème effectif : une session distante (en mode `auto`) impose `root`
+    /// (utilisateur distant privilégié) ou `distant` ; sinon le thème de base.
+    fn theme_effectif(&self) -> Theme
+      {
+        let nom = self.config.theme.to_ascii_lowercase();
+        if (nom.is_empty() || nom == "auto")
+          && let Some(session) = &self.session_distante
+          {
+            if session.utilisateur.as_deref() == Some("root")
+              {
+                return theme::ROOT;
+              }
+            return theme::DISTANT;
+          }
+        self.theme_base()
       }
 
     /// Identité affichée : celle publiée par le shell (reprise root), sinon la
@@ -810,21 +915,37 @@ impl App
     /// Traite un évènement souris.
     ///
     /// Si le programme enfant réclame le suivi souris, l'évènement lui est
-    /// **transmis** (encodé selon son protocole). Sinon Bashop l'exploite :
-    /// molette → défilement du scrollback, glisser gauche → sélection copiée en
-    /// OSC 52, clic-milieu → collage du presse-papier.
+    /// **transmis** (encodé selon son protocole), dans la zone centrale seule.
+    /// En plein écran sans suivi, la molette est traduite en `↑`/`↓` (fidèle au
+    /// multiplexeur) et le reste est ignoré. Sinon Bashop l'exploite : molette →
+    /// défilement du scrollback, glisser gauche → sélection copiée en OSC 52,
+    /// clic-milieu → collage du presse-papier.
     fn souris(
       &mut self,
       terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>,
       ev: &MouseEvent,
     ) -> Result<()>
       {
+        let dans_centre = ev.row >= 1
+          && ev.row < self.hauteur.saturating_sub(1)
+          && ev.column < self.largeur;
         if self.term.suivi_souris()
           {
-            if let Some(octets) = encoder_souris(&self.term, ev)
+            if dans_centre
+              && let Some(octets) = encoder_souris(&self.term, ev)
               {
                 self.ecrivain.write_all(&octets)?;
                 self.ecrivain.flush()?;
+              }
+            return Ok(());
+          }
+        if self.term.en_plein_ecran()
+          {
+            match ev.kind
+              {
+                MouseEventKind::ScrollUp => self.ecrire_fleche(true)?,
+                MouseEventKind::ScrollDown => self.ecrire_fleche(false)?,
+                _ => {}
               }
             return Ok(());
           }
@@ -838,6 +959,21 @@ impl App
             MouseEventKind::Down(MouseButton::Middle) => self.coller_presse_papier()?,
             _ => {}
           }
+        Ok(())
+      }
+
+    /// Envoie une flèche verticale au programme enfant, selon DECCKM.
+    fn ecrire_fleche(&mut self, vers_le_haut: bool) -> Result<()>
+      {
+        let octets: &[u8] = match (self.term.curseur_appli, vers_le_haut)
+          {
+            (true, true) => b"\x1bOA",
+            (true, false) => b"\x1bOB",
+            (false, true) => b"\x1b[A",
+            (false, false) => b"\x1b[B",
+          };
+        self.ecrivain.write_all(octets)?;
+        self.ecrivain.flush()?;
         Ok(())
       }
 
@@ -1292,6 +1428,11 @@ impl App
             Some((texte, moment)) if moment.elapsed() < Duration::from_secs(6) => Some(texte.clone()),
             _ => None,
           };
+        let distant = self.session_distante.as_ref().map(|session| match &session.utilisateur
+          {
+            Some(utilisateur) => format!("{} {utilisateur}@{}", session.programme, session.hote),
+            None => format!("{} {}", session.programme, session.hote),
+          });
         let vue = Vue {
           term: &self.term,
           config: &self.config,
@@ -1308,6 +1449,8 @@ impl App
           notification,
           horodatage: self.instant_commande.clone(),
           alerte: self.alerte_courante(),
+          plein_ecran: self.term.en_plein_ecran(),
+          distant,
         };
         vue.dessiner(cadre);
       }
@@ -1331,6 +1474,8 @@ struct Vue<'a>
     notification: Option<String>,
     horodatage: Option<String>,
     alerte: Option<String>,
+    plein_ecran: bool,
+    distant: Option<String>,
   }
 
 impl Vue<'_>
@@ -1366,6 +1511,8 @@ impl Vue<'_>
           horodatage: self.horodatage.clone(),
           alerte: self.alerte.clone(),
           derniere_erreur: self.term.derniere_erreur.clone(),
+          plein_ecran: self.plein_ecran,
+          distant: self.distant.clone(),
         };
         cadre.render_widget(
           Paragraph::new(ligne_contexte(&contexte, largeur, self.palette.contexte_fg.tuple(), self.palette.contexte_bg.tuple())),
@@ -1966,7 +2113,7 @@ fn encoder_souris(term: &Terminal, ev: &MouseEvent) -> Option<Vec<u8>>
         MouseEventKind::ScrollRight => (67, false),
       };
     let x = ev.column + 1;
-    let y = ev.row + 1;
+    let y = ev.row;
     if term.souris_sgr
       {
         let finale = if relache { 'm' } else { 'M' };
@@ -2342,6 +2489,8 @@ mod tests
           notification: None,
           horodatage: None,
           alerte: None,
+          plein_ecran: false,
+          distant: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(100, 8)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
@@ -2374,6 +2523,8 @@ mod tests
           notification: None,
           horodatage: None,
           alerte: None,
+          plein_ecran: false,
+          distant: None,
         };
         let mut terminal = RatTerminal::new(TestBackend::new(10, 2)).unwrap();
         terminal.draw(|cadre| vue.dessiner(cadre)).unwrap();
@@ -2506,7 +2657,7 @@ mod tests
           modifiers: KeyModifiers::NONE,
         };
         let enc = encoder_souris(&term, &ev).unwrap();
-        assert_eq!(enc, b"\x1b[<0;5;3M".to_vec());
+        assert_eq!(enc, b"\x1b[<0;5;2M".to_vec());
       }
 
     #[test]
@@ -2522,7 +2673,7 @@ mod tests
           modifiers: KeyModifiers::NONE,
         };
         let enc = encoder_souris(&term, &ev).unwrap();
-        assert_eq!(enc, b"\x1b[<2;2;2m".to_vec());
+        assert_eq!(enc, b"\x1b[<2;2;1m".to_vec());
       }
 
     #[test]
@@ -2604,7 +2755,7 @@ mod tests
           modifiers: KeyModifiers::NONE,
         };
         let enc = encoder_souris(&term, &ev).unwrap();
-        assert_eq!(enc, vec![0x1b, b'[', b'M', 32 + 1, 32 + 10, 32 + 13]);
+        assert_eq!(enc, vec![0x1b, b'[', b'M', 32 + 1, 32 + 10, 32 + 12]);
       }
 
     #[test]

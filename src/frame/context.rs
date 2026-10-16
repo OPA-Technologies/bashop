@@ -9,6 +9,8 @@
 pub const FOND: (u8, u8, u8) = super::FOND_CADRE;
 /// Avant-plan par défaut de `term_context`.
 pub const TEXTE: (u8, u8, u8) = (0xE6, 0xED, 0xF3);
+/// Avant-plan de la zone centre lors d'une session distante (cyan).
+pub const DISTANT: (u8, u8, u8) = (0x7F, 0xD4, 0xE8);
 /// Couleur du code retour réussi.
 pub const VERT: (u8, u8, u8) = (0x89, 0xD1, 0x85);
 /// Couleur du code retour en erreur.
@@ -51,6 +53,10 @@ pub struct Contexte
     /// Copie de la première ligne du message d'erreur de la dernière commande
     /// (affichée avec le code retour), sans jamais altérer la sortie réelle.
     pub derniere_erreur: Option<String>,
+    /// Une application plein écran occupe la zone centrale.
+    pub plein_ecran: bool,
+    /// Session distante active (`ssh`, `telnet`…), déjà mise en forme.
+    pub distant: Option<String>,
   }
 
 /// Zone gauche : rappel des touches et options découvertes.
@@ -74,6 +80,14 @@ pub fn gauche(contexte: &Contexte) -> String
 pub fn centre(contexte: &Contexte) -> String
   {
     let mut fragments: Vec<String> = Vec::new();
+    if let Some(distant) = &contexte.distant
+      {
+        fragments.push(format!("⇢ {distant}"));
+      }
+    if contexte.plein_ecran
+      {
+        fragments.push("⛶ plein écran".to_string());
+      }
     if let Some(alerte) = &contexte.alerte
       {
         fragments.push(alerte.clone());
@@ -124,6 +138,7 @@ pub fn couleur_centre(contexte: &Contexte) -> (u8, u8, u8)
         None if contexte.root => ROUGE,
         None if contexte.alerte.is_some() => JAUNE,
         None if contexte.notification.is_some() => JAUNE,
+        None if contexte.distant.is_some() => DISTANT,
         None => TEXTE,
       }
   }
@@ -224,5 +239,31 @@ mod tests
         };
         assert!(centre(&contexte).contains("suppression récursive"));
         assert_eq!(couleur_centre(&contexte), JAUNE);
+      }
+
+    #[test]
+    fn l_indicateur_plein_ecran_est_affiche()
+      {
+        let contexte = Contexte { plein_ecran: true, ..Contexte::default() };
+        assert!(centre(&contexte).contains("plein écran"), "{}", centre(&contexte));
+      }
+
+    #[test]
+    fn une_session_distante_est_affichee_en_cyan()
+      {
+        let contexte = Contexte { distant: Some("ssh root@srv".to_string()), ..Contexte::default() };
+        assert!(centre(&contexte).contains("ssh root@srv"), "{}", centre(&contexte));
+        assert_eq!(couleur_centre(&contexte), DISTANT);
+      }
+
+    #[test]
+    fn le_code_retour_prime_sur_le_dist()
+      {
+        let contexte = Contexte {
+          distant: Some("ssh root@srv".to_string()),
+          statut: Some(0),
+          ..Contexte::default()
+        };
+        assert_eq!(couleur_centre(&contexte), VERT);
       }
   }

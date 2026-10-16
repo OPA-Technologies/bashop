@@ -298,29 +298,123 @@ impl Grid
         (debut, fin)
       }
 
-    /// Fait défiler la grille d'une ligne vers le haut.
+    /// Fait défiler la grille d'une ligne vers le haut, sur tout l'écran.
     pub fn defiler_haut(&mut self)
       {
-        let largeur = self.largeur as usize;
-        let premiere: Vec<Cellule> = self.cellules[0..largeur].to_vec();
-        self.arriere_plan.push_back(premiere);
-        while self.arriere_plan.len() > CAPACITE_ARRIERE_PLAN
-          {
-            self.arriere_plan.pop_front();
-          }
-        self.cellules.drain(0..largeur);
-        self.cellules.resize(largeur * self.hauteur as usize, Cellule::default());
+        self.defiler_zone_haut(0, self.hauteur.saturating_sub(1), true);
       }
 
-    /// Fait défiler la grille d'une ligne vers le bas.
+    /// Fait défiler la grille d'une ligne vers le bas, sur tout l'écran.
     pub fn defiler_bas(&mut self)
       {
-        let largeur = self.largeur as usize;
-        for _ in 0..largeur
+        self.defiler_zone_bas(0, self.hauteur.saturating_sub(1));
+      }
+
+    /// Fait défiler vers le haut la zone `[haut, bas]` d'une ligne : les lignes
+    /// montent, la ligne `bas` est vidée. Si `historique` est vrai **et** que la
+    /// zone commence à la ligne 0, la ligne évincée rejoint l'arrière-plan
+    /// défilant ; sinon elle est perdue (plein écran ou marge haute).
+    pub fn defiler_zone_haut(&mut self, haut: u16, bas: u16, historique: bool)
+      {
+        let haut = haut.min(self.hauteur.saturating_sub(1));
+        let bas = bas.min(self.hauteur.saturating_sub(1));
+        if haut > bas
           {
-            self.cellules.insert(0, Cellule::default());
+            return;
           }
-        self.cellules.truncate(largeur * self.hauteur as usize);
+        let largeur = self.largeur as usize;
+        let l0 = haut as usize;
+        let b0 = bas as usize;
+        if historique && haut == 0
+          {
+            let premiere: Vec<Cellule> = self.cellules[0..largeur].to_vec();
+            self.arriere_plan.push_back(premiere);
+            while self.arriere_plan.len() > CAPACITE_ARRIERE_PLAN
+              {
+                self.arriere_plan.pop_front();
+              }
+          }
+        if l0 < b0
+          {
+            self.cellules.copy_within((l0 + 1) * largeur..(b0 + 1) * largeur, l0 * largeur);
+          }
+        for cellule in &mut self.cellules[b0 * largeur..(b0 + 1) * largeur]
+          {
+            *cellule = Cellule::default();
+          }
+      }
+
+    /// Fait défiler vers le bas la zone `[haut, bas]` d'une ligne : les lignes
+    /// descendent, la ligne `haut` est vidée et rien n'alimente l'historique.
+    pub fn defiler_zone_bas(&mut self, haut: u16, bas: u16)
+      {
+        let haut = haut.min(self.hauteur.saturating_sub(1));
+        let bas = bas.min(self.hauteur.saturating_sub(1));
+        if haut > bas
+          {
+            return;
+          }
+        let largeur = self.largeur as usize;
+        let l0 = haut as usize;
+        let b0 = bas as usize;
+        if l0 < b0
+          {
+            self.cellules.copy_within(l0 * largeur..b0 * largeur, (l0 + 1) * largeur);
+          }
+        for cellule in &mut self.cellules[l0 * largeur..(l0 + 1) * largeur]
+          {
+            *cellule = Cellule::default();
+          }
+      }
+
+    /// Insère `n` lignes vierges à partir de la ligne `lig`, dans la zone
+    /// `[haut, bas]` : les lignes basses sortent de la zone (IL, `CSI L`). Ne
+    /// fait rien si `lig` est hors de la zone.
+    pub fn inserer_lignes(&mut self, lig: u16, n: u16, haut: u16, bas: u16, modele: Cellule)
+      {
+        let haut = haut.min(self.hauteur.saturating_sub(1));
+        let bas = bas.min(self.hauteur.saturating_sub(1));
+        if lig < haut || lig > bas
+          {
+            return;
+          }
+        let largeur = self.largeur as usize;
+        let l0 = lig as usize;
+        let b0 = bas as usize;
+        let n0 = (n.max(1) as usize).min(b0 - l0 + 1);
+        if l0 + n0 <= b0
+          {
+            self.cellules.copy_within(l0 * largeur..(b0 - n0 + 1) * largeur, (l0 + n0) * largeur);
+          }
+        for cellule in &mut self.cellules[l0 * largeur..(l0 + n0) * largeur]
+          {
+            *cellule = modele;
+          }
+      }
+
+    /// Supprime `n` lignes à partir de la ligne `lig`, dans la zone `[haut,
+    /// bas]` : les lignes basses remontent, la fin de zone est vidée (DL,
+    /// `CSI M`). Ne fait rien si `lig` est hors de la zone.
+    pub fn supprimer_lignes(&mut self, lig: u16, n: u16, haut: u16, bas: u16, modele: Cellule)
+      {
+        let haut = haut.min(self.hauteur.saturating_sub(1));
+        let bas = bas.min(self.hauteur.saturating_sub(1));
+        if lig < haut || lig > bas
+          {
+            return;
+          }
+        let largeur = self.largeur as usize;
+        let l0 = lig as usize;
+        let b0 = bas as usize;
+        let n0 = (n.max(1) as usize).min(b0 - l0 + 1);
+        if l0 + n0 <= b0
+          {
+            self.cellules.copy_within((l0 + n0) * largeur..(b0 + 1) * largeur, l0 * largeur);
+          }
+        for cellule in &mut self.cellules[(b0 + 1 - n0) * largeur..(b0 + 1) * largeur]
+          {
+            *cellule = modele;
+          }
       }
 
     /// Redimensionne en conservant le contenu recouvrant (coin haut-gauche).
@@ -488,5 +582,50 @@ mod tests
         let mut grille = Grid::nouvelle(6, 1);
         ecrire(&mut grille, 0, "a b");
         assert_eq!(grille.mot_a(0, 1), (1, 2));
+      }
+
+    #[test]
+    fn le_defilement_de_zone_ne_touche_pas_hors_zone()
+      {
+        let mut grille = Grid::nouvelle(3, 4);
+        ecrire(&mut grille, 0, "AAA");
+        ecrire(&mut grille, 1, "BBB");
+        ecrire(&mut grille, 2, "CCC");
+        ecrire(&mut grille, 3, "DDD");
+        grille.defiler_zone_haut(1, 2, false);
+        assert_eq!(grille.texte_ligne(0), "AAA");
+        assert_eq!(grille.texte_ligne(1), "CCC");
+        assert_eq!(grille.texte_ligne(2), "   ");
+        assert_eq!(grille.texte_ligne(3), "DDD");
+        assert_eq!(grille.arriere_plan_len(), 0);
+      }
+
+    #[test]
+    fn le_defilement_de_zone_depuis_le_haut_alimente_l_historique()
+      {
+        let mut grille = Grid::nouvelle(3, 2);
+        ecrire(&mut grille, 0, "AAA");
+        ecrire(&mut grille, 1, "BBB");
+        grille.defiler_zone_haut(0, 1, true);
+        assert_eq!(grille.arriere_plan_len(), 1);
+        assert_eq!(grille.texte_ligne(0), "BBB");
+      }
+
+    #[test]
+    fn inserer_et_supprimer_lignes_dans_la_zone()
+      {
+        let mut grille = Grid::nouvelle(3, 4);
+        ecrire(&mut grille, 0, "AAA");
+        ecrire(&mut grille, 1, "BBB");
+        ecrire(&mut grille, 2, "CCC");
+        ecrire(&mut grille, 3, "DDD");
+        grille.inserer_lignes(1, 1, 0, 3, Cellule::default());
+        assert_eq!(grille.texte_ligne(1), "   ");
+        assert_eq!(grille.texte_ligne(2), "BBB");
+        assert_eq!(grille.texte_ligne(3), "CCC");
+        grille.supprimer_lignes(1, 1, 0, 3, Cellule::default());
+        assert_eq!(grille.texte_ligne(1), "BBB");
+        assert_eq!(grille.texte_ligne(2), "CCC");
+        assert_eq!(grille.texte_ligne(3), "   ");
       }
   }

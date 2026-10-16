@@ -25,6 +25,111 @@ pub fn contient_declencheur(commande: &str, declencheurs: &[String]) -> bool
       .any(|mot| declencheurs.iter().any(|d| d == mot))
   }
 
+/// Programmes ouvrant une session interactive vers une autre machine.
+pub const DISTANTS: &[&str] = &["ssh", "slogin", "mosh", "telnet", "rlogin", "sshpass"];
+
+/// Lanceurs derrière lesquels un mot de commande reste un programme réel
+/// (évite de confondre `echo ssh …` avec une connexion).
+const LANCEURS: &[&str] =
+  &["sudo", "doas", "env", "nohup", "exec", "command", "time", "nice", "ionice", "setsid"];
+
+/// Options courtes de `ssh`/`telnet` qui consomment l'argument suivant.
+const OPTIONS_A_ARGUMENT: &[&str] =
+  &["-p", "-l", "-i", "-o", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-J", "-L", "-m", "-O", "-Q", "-R", "-S", "-W", "-w", "-P"];
+
+/// Description d'une session distante détectée sur la ligne de commande.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionDistante
+  {
+    /// Programme de connexion (`ssh`, `telnet`, `mosh`…).
+    pub programme: String,
+    /// Utilisateur distant, si connu (`user@host` ou `-l user`).
+    pub utilisateur: Option<String>,
+    /// Hôte distant.
+    pub hote: String,
+  }
+
+/// Détecte une connexion distante dans une ligne de commande et en extrait le
+/// programme, l'utilisateur (facultatif) et l'hôte. Renvoie `None` dès qu'aucun
+/// programme connu n'ouvre la session.
+pub fn session_distante(commande: &str) -> Option<SessionDistante>
+  {
+    let mots = decouper(commande);
+    let mut index = mots
+      .iter()
+      .enumerate()
+      .position(|(position, mot)| {
+        DISTANTS.contains(&dernier_segment(mot))
+          && (position == 0 || LANCEURS.contains(&mots[position - 1]))
+      })?;
+    if dernier_segment(mots[index]) == "sshpass"
+      {
+        let suivant = mots
+          .iter()
+          .enumerate()
+          .skip(index + 1)
+          .find(|(_, mot)| {
+            let segment = dernier_segment(mot);
+            DISTANTS.contains(&segment) && segment != "sshpass"
+          })
+          .map(|(position, _)| position);
+        index = suivant?;
+      }
+    let programme = dernier_segment(mots[index]).to_string();
+    let mut utilisateur: Option<String> = None;
+    let mut i = index + 1;
+    while i < mots.len()
+      {
+        let mot = mots[i];
+        if mot == "-l"
+          {
+            if let Some(nom) = mots.get(i + 1)
+              {
+                utilisateur = Some((*nom).to_string());
+                i += 2;
+              }
+            else
+              {
+                i += 1;
+              }
+            continue;
+          }
+        if mot.starts_with('-')
+          {
+            if OPTIONS_A_ARGUMENT.contains(&mot)
+              {
+                i += 2;
+              }
+            else
+              {
+                i += 1;
+              }
+            continue;
+          }
+        let (utilisateur_cible, hote) = match mot.split_once('@')
+          {
+            Some((nom, domaine)) if !nom.is_empty() => (Some(nom.to_string()), domaine.to_string()),
+            _ => (None, mot.to_string()),
+          };
+        if hote.is_empty()
+          {
+            return None;
+          }
+        return Some(SessionDistante {
+          programme,
+          utilisateur: utilisateur_cible.or(utilisateur),
+          hote,
+        });
+      }
+    None
+  }
+
+/// Dernier segment d'un chemin (`/usr/bin/ssh` → `ssh`).
+fn dernier_segment(mot: &str) -> &str
+  {
+    mot.rsplit('/').next().unwrap_or(mot)
+  }
+
 /// Renvoie le dernier segment de commande de la ligne, c'est-à-dire la partie
 /// qui suit le dernier séparateur de haut niveau : `|` (couvre `||`, `|&`),
 /// `;`, `&&` ou `&` d'arrière-plan. Les séparateurs situés entre guillemets ou
@@ -172,5 +277,56 @@ mod tests
       {
         assert_eq!(programme_courant("find / -name x | wc -l"), Some("wc"));
         assert_eq!(programme_courant("  "), None);
+      }
+
+    #[test]
+    fn une_connexion_ssh_simple_est_detectee()
+      {
+        let session = session_distante("ssh root@srv").expect("ssh détecté");
+        assert_eq!(session.programme, "ssh");
+        assert_eq!(session.utilisateur.as_deref(), Some("root"));
+        assert_eq!(session.hote, "srv");
+      }
+
+    #[test]
+    fn les_options_ssh_sont_ignorees_avant_l_hote()
+      {
+        let session = session_distante("ssh -p 2222 deploy@srv -X").expect("ssh détecté");
+        assert_eq!(session.utilisateur.as_deref(), Some("deploy"));
+        assert_eq!(session.hote, "srv");
+      }
+
+    #[test]
+    fn l_option_l_fournit_l_utilisateur()
+      {
+        let session = session_distante("ssh -l deploy srv").expect("ssh détecté");
+        assert_eq!(session.utilisateur.as_deref(), Some("deploy"));
+        assert_eq!(session.hote, "srv");
+      }
+
+    #[test]
+    fn telnet_et_lanceur_sont_reconnus()
+      {
+        let session = session_distante("sudo telnet routeur").expect("telnet détecté");
+        assert_eq!(session.programme, "telnet");
+        assert_eq!(session.utilisateur, None);
+        assert_eq!(session.hote, "routeur");
+      }
+
+    #[test]
+    fn sshpass_retient_ssh_et_sa_cible()
+      {
+        let session = session_distante("sshpass -p secret ssh user@srv").expect("ssh détecté");
+        assert_eq!(session.programme, "ssh");
+        assert_eq!(session.utilisateur.as_deref(), Some("user"));
+        assert_eq!(session.hote, "srv");
+      }
+
+    #[test]
+    fn un_mot_ssh_argument_ne_declenche_pas()
+      {
+        assert_eq!(session_distante("echo ssh bonjour"), None);
+        assert_eq!(session_distante("ls -la"), None);
+        assert_eq!(session_distante("ssh"), None);
       }
   }
