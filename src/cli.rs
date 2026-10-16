@@ -6,13 +6,21 @@
 use clap::{Parser, Subcommand};
 
 /// Interface en ligne de commande de Bashop.
+///
+/// Le drapeau `-V`/`--version` applique le contrat d'op : il publie une seule
+/// ligne `<version>_<statut> (<jj-mm-yyyy>)`, lue depuis les constantes de
+/// [`crate`] plutôt que déduite du manifeste.
 #[derive(Parser, Debug)]
-#[command(name = "bashop", version = crate::VERSION, about = "Cadre terminal permanent et prompt thémé")]
+#[command(name = "bashop", about = "Cadre terminal permanent et prompt thémé", disable_version_flag = true)]
 pub struct Cli
   {
+    /// Imprime la version de la variante (`<version>_<statut> (<date>)`) puis sort.
+    #[arg(short = 'V', long = "version")]
+    pub version: bool,
+
     /// Sous-commande à exécuter.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
   }
 
 /// Sous-commandes disponibles.

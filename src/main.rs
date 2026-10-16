@@ -9,7 +9,17 @@ use clap::Parser;
 fn main() -> Result<()>
   {
     let cli = Cli::parse();
-    match cli.command
+    if cli.version
+      {
+        println!("{}_{} ({})", bashop::RELEASE, bashop::STATUT, bashop::DATE_LAST_MAJ);
+        return Ok(());
+      }
+    let Some(command) = cli.command
+      else
+        {
+          return Ok(());
+        };
+    match command
       {
         Command::Run { shell } =>
           {

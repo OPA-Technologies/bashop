@@ -14,8 +14,8 @@ Il fonctionne de façon homogène sur les shells usuels (`bash`, `zsh`, `sh`,
 PowerShell, `cmd`) et sur plusieurs OS (Linux, FreeBSD, Windows, DSM/SRM).
 
 Produit en Rust (edition 2024, `rust-version = 1.88`), licence
-GPL-3.0-or-later, crate `bashop` (lib + bin). Version cible de première
-release : `0.1.0` (le squelette porte `0.0.1`).
+GPL-3.0-or-later, crate `bashop` (lib + bin). Version courante : `1.0.0`,
+statut `Stable` (`src/lib.rs` en est la source unique).
 
 ## 2. Positionnement et modèle d'exécution
 
@@ -99,8 +99,8 @@ centrale démarre à la ligne 2. La zone centrale a donc `N-2` lignes visibles.
 
 ### 3.1 `term_stat` (ligne 1)
 
-- Gauche : `user@host` avec `[FQDN IP]` (FQDN et IP réelle entre crochets).
-- Centre : `OS + flavor`.
+- Gauche : `OS + flavor`.
+- Centre : `user@host` avec `[FQDN IP]` (FQDN et IP réelle entre crochets).
 - Droite : drapeau pays + `[code pays]`, date et heure locales.
 - Extra compact : heure UTC au format **jour/mois heure:minute**.
 - Le FQDN privilégie `hostname -f`, puis `hostname -d`, `dnsdomainname` et
@@ -464,7 +464,7 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
 - **Nomenclature des archives** :
   `bashop-<version>-<os>-<arch>[-<variante>].tar.gz` (Unix) ou
   `bashop-<version>-<os>-<arch>[-<variante>].zip` (Windows) — ex.
-  `bashop-0.5.4-linux-x86_64-musl.tar.gz`, `bashop-0.5.4-windows-x86_64.zip`.
+  `bashop-1.0.0-linux-x86_64-musl.tar.gz`, `bashop-1.0.0-windows-x86_64.zip`.
 - **Cibles** : `linux x86_64` (Ubuntu, glibc), `linux x86_64-musl` (statique,
   DSM), `linux armv7-musl` (`armv7-unknown-linux-musleabi`, **soft-float** :
   routeurs Synology SRM RT1900ac (SRM 1.2) et MR2200ac (SRM 1.3), DSM ARMv7),
@@ -476,6 +476,13 @@ Dépendances : `op-tui` (**path**, dépôt de primitives TUI dans
   **`cmd` best-effort** (`AutoRun` `HKCU\…\Command Processor` posant `PROMPT` :
   marqueurs `133;A/B` et couleurs, **sans** marqueur de fin `133;D` — limite
   native de `cmd` ; statut par repli « idle »).
+- **Contrat `-V` (suivi d'op)** : chaque binaire déclare, dans `src/lib.rs`,
+  trois constantes figées à la compilation — `RELEASE` (`x.y.z`, suit
+  `CARGO_PKG_VERSION`), `STATUT` (valeur de la liste connue d'op) et
+  `DATE_LAST_MAJ` (`jj-mm-yyyy`). `bashop -V` / `--version` publie une seule
+  ligne `<version>_<statut> (<jj-mm-yyyy>)`, lue par le menu d'op au lieu d'être
+  déduite du registre. Un binaire antérieur, qui ne publie qu'une version nue,
+  reste lisible (statut et date vides).
 - Compilation croisée via `cargo zigbuild` (zig) pour les cibles non natives.
 - Compilation locale = option de **développement** uniquement.
 

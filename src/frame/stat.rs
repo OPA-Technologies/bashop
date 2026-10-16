@@ -1,6 +1,6 @@
 //! `term_stat` — ligne d'état générale (ligne 1).
 //!
-//! Gauche : `user@host [IP]` · centre : OS+flavor · droite : pays, date/heure
+//! Gauche : OS+flavor · centre : `user@host [IP]` · droite : pays, date/heure
 //! et UTC. Le contenu est réparti sur la largeur du terminal.
 
 use crate::providers;
@@ -81,12 +81,12 @@ pub fn repartir(gauche: &str, centre: &str, droite: &str, largeur: usize) -> Str
 pub fn contenu(largeur: u16, identite: &str, capture: bool) -> String
   {
     let fqdn = providers::fqdn();
-    let mut gauche = match providers::adresse_ip()
+    let mut gauche = providers::os_flavor();
+    let mut centre = match providers::adresse_ip()
       {
         Some(ip) => format!("{} [{} {}]", identite, fqdn, ip),
         None => format!("{} [{}]", identite, fqdn),
       };
-    let mut centre = providers::os_flavor();
     let (local, utc) = providers::horloge();
     let pays = providers::code_pays();
     let drapeau = providers::drapeau(&pays);

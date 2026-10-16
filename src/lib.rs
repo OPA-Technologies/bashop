@@ -8,10 +8,17 @@
 //! La référence de conception complète est `SPEC.md`. Ce module ne pose que
 //! l'arborescence et les types fondateurs du jalon M0.
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Version publiée, figée à la compilation (`CARGO_PKG_VERSION`).
+pub const RELEASE: &str = env!("CARGO_PKG_VERSION");
 
-/// Statut du projet (source unique : ce fichier).
-pub const STATUT: &str = "Release";
+/// Alias historique de [`RELEASE`].
+pub const VERSION: &str = RELEASE;
+
+/// Statut du projet (source unique : ce fichier), valeur de la liste connue d'op.
+pub const STATUT: &str = "Stable";
+
+/// Date de dernière mise à jour, format `jj-mm-yyyy` (contrat `-V` d'op).
+pub const DATE_LAST_MAJ: &str = "16-10-2026";
 
 pub mod bootstrap;
 pub mod cli;
